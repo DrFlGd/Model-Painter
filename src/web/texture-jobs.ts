@@ -4,6 +4,22 @@
 
 import type { PaintInput, PaintResult, Picture, Progress, Suggestion, TextureSettings } from '../core/texpaint.ts';
 import { DEFAULT_SETTINGS } from '../core/texpaint.ts';
+import { FINISH_DEFAULTS, type FinishSettings } from '../core/finish.ts';
+import type { FinishedModel } from '../core/finish-map.ts';
+
+/** The model made watertight: the model to show, and what finishing did. */
+export interface FinishOutput {
+  model: FinishedModel;
+  notes: string[];
+  /** mm³ */
+  volume: number;
+  shells: number;
+  hollows: number;
+  gapVolume: number;
+  looseRemoved: number;
+}
+
+export interface FinishPaint { colour: Uint8Array; codes: Map<number, string> }
 
 export type Request = { id: number } & (
   | { op: 'decode'; name: string; bytes: Uint8Array }
@@ -11,6 +27,7 @@ export type Request = { id: number } & (
   | { op: 'suggest'; settings: TextureSettings }
   | { op: 'reduce'; material: number; palette: string[]; settings: TextureSettings }
   | { op: 'paint'; settings: TextureSettings; suggestion: Suggestion | null }
+  | { op: 'finish'; groups: Uint32Array; paint: FinishPaint | null; settings: FinishSettings; baseMaterial: number }
 );
 
 type Waiting = { resolve: (v: never) => void; reject: (e: Error) => void; progress?: Progress };
@@ -86,6 +103,12 @@ export class TextureJobs {
   async paint(settings: Partial<TextureSettings>, suggestion: Suggestion | null, progress?: Progress): Promise<PaintResult> {
     await this.ready();
     return this.ask({ op: 'paint', settings: { ...DEFAULT_SETTINGS, ...settings }, suggestion }, progress);
+  }
+
+  /** The model made watertight (finish.ts), its paint, UVs and materials carried over (finish-map.ts). */
+  async finish(groups: Uint32Array, paint: FinishPaint | null, settings: Partial<FinishSettings>, baseMaterial: number, progress?: Progress): Promise<FinishOutput> {
+    await this.ready();
+    return this.ask({ op: 'finish', groups, paint, settings: { ...FINISH_DEFAULTS, ...settings }, baseMaterial }, progress);
   }
 
   /** Stops whatever the worker is doing. */

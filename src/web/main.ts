@@ -1,5 +1,6 @@
 // Model Painter's page: open a model in any of the formats it reads, with
-// its textures; size and turn it for printing; paint it from its textures
+// its textures; size and turn it for printing; make it watertight (with a
+// flat bottom or a base) keeping its paint; paint it from its textures
 // (Prepare texture) or by hand (brush, fill, corners, text, picture stamps
 // made with Prepare image); save a painted 3MF, a 3MF split by colour, or
 // an STL. The same page runs in a browser and in the desktop app.
@@ -9,7 +10,7 @@ import { Stage } from './stage.ts';
 import { PaintView } from './paint-view.ts';
 import { Picker } from './pick.ts';
 import { TexturedView, type MaterialLook } from './textured.ts';
-import { TextureJobs, Cancelled } from './texture-jobs.ts';
+import { TextureJobs, Cancelled, type FinishOutput } from './texture-jobs.ts';
 import { prepareTexture, planPalette, type TexturePlan } from './prepare-texture.ts';
 import { prepareImage, tracedPreview, dialog, h, hex, type ImageSettings } from './prepare-image.ts';
 import { registerThreeImporters } from './import-three.ts';
@@ -25,6 +26,8 @@ import { painted3mf, parts3mf, stl } from '../core/export.ts';
 import { join } from '../core/zip-write.ts';
 import { splitByMaterial } from '../core/split-colours.ts';
 import { insidePolygon, type FillMode, type FillRule } from '../core/paint-fill.ts';
+import { FINISH_DEFAULTS, type FinishSettings } from '../core/finish.ts';
+import { openEdges } from '../core/mesh.ts';
 import type { StampView } from '../core/paint-model.ts';
 import type { RGB } from '../core/colour.ts';
 import { parseSvg } from '../vendor/svg.ts';
@@ -83,6 +86,8 @@ interface Loaded {
   pictures: (Picture | null)[];
   use: Use[];
   textured: TexturedView;
+  /** how far it is from a closed solid, once the Finish tab has looked */
+  check?: { open: number; overused: number };
 }
 const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 const UNIT_MM: Record<ImportedModel['units'], number> = { mm: 1, cm: 10, m: 1000, in: 25.4, unknown: 1 };
@@ -146,10 +151,12 @@ async function openSource(src: FileSource) {
     status(`${src.name}: ${errorText(e)}`);
     return;
   }
-  // the old model goes
+  // the old model goes, and the one made watertight from it
+  dropOther();
   if (loaded) { stage.content.remove(loaded.textured.object); loaded.textured.dispose(); }
   if (paint) { stage.content.remove(paint.object); paint.dispose(); paint = null; }
   picker?.dispose(); picker = null;
+  shown = 'original'; finishInfo = null; changes = 0;
   plan = null; lastPaint = null;
   const pictures: (Picture | null)[] = model.materials.map(() => null);
   const use: Use[] = model.materials.map(() => 'none');
@@ -208,6 +215,7 @@ async function openSource(src: FileSource) {
   renderPlan();
   renderPalette();
   updatePaintInfo();
+  renderFinish();
   updateButtons();
   setMouse();
   status(model.paint ? `${model.name} is open with its paint.` : anyPaintSource()
@@ -236,9 +244,10 @@ function defaultScale(model: ImportedModel): { scale: number; note?: string } {
   return { scale: k, note: `It is ${real} tall in its file${mmFile && model.units !== 'mm' ? ' (taking its numbers as millimetres)' : ''}, so it was sized to ${target} mm tall. Set the size on the Model tab.` };
 }
 
-/** Puts the model at its print size and turn, standing on the plate, centred. */
-function applyTransform() {
+/** Puts the model at its print size and turn, standing on the plate, centred. `changed`: the person changed it (not only shown again). */
+function applyTransform(changed = true) {
   if (!loaded) return;
+  if (changed && shown === 'original') changes++;
   const { model, original: O, turn: R, scale: k } = loaded;
   const P = model.mesh.positions;
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -538,6 +547,204 @@ async function paintFromTextures() {
 }
 $('paint-textures').onclick = () => void paintFromTextures();
 
+// ---------- making it watertight ----------
+// The Finish tab makes the original into a watertight model (finish.ts, in
+// the worker), its paint, UVs and materials carried over (finish-map.ts).
+// Both are kept, each with its own paint, colours, view and size; the one
+// shown is the one painted and saved. Making it again always starts from the original.
+interface Slot { loaded: Loaded; paint: PaintView | null; picker: Picker | null; look: 'original' | 'painted'; palette: RGB[] }
+let shown: 'original' | 'finished' = 'original';
+/** the model not shown just now */
+let other: Slot | null = null;
+/** what the last finishing did, and from which state of the original */
+let finishInfo: { request: string; from: number; out: Omit<FinishOutput, 'model'>; triangles: number; before: number } | null = null;
+/** changes to the original's shape or paint so far, so a watertight model made before them shows as out of date */
+let changes = 0;
+/** while one model is swapped for the other (its paint shown again is no change) */
+let switching = false;
+const FINISH_KEY = 'model-painter-finish';
+
+function dropSlot(s: Slot | null) {
+  if (!s) return;
+  stage.content.remove(s.loaded.textured.object);
+  s.loaded.textured.dispose();
+  if (s.paint) { stage.content.remove(s.paint.object); s.paint.dispose(); }
+  s.picker?.dispose();
+}
+function dropOther() { dropSlot(other); other = null; }
+
+/** Shows the original or the watertight model. */
+function show(which: 'original' | 'finished') {
+  if (which === shown || !loaded || !other) return;
+  switching = true;
+  try { swap(which); } finally { switching = false; }
+}
+function swap(which: 'original' | 'finished') {
+  if (!loaded || !other) return;
+  const now: Slot = { loaded, paint, picker, look, palette };
+  stage.content.remove(loaded.textured.object);
+  if (paint) stage.content.remove(paint.object);
+  const s = other;
+  other = now;
+  loaded = s.loaded; paint = s.paint; picker = s.picker;
+  palette = s.palette;
+  active = Math.min(active, palette.length - 1);
+  stage.content.add(loaded.textured.object);
+  if (paint) { stage.content.add(paint.object); paint.setPalette(palette); }
+  loaded.textured.setLooks(looks(loaded));
+  shown = which;
+  faceMapCache = null;
+  applyTransform(false);
+  setLook(paint ? s.look : 'original');
+  if (tab === 'paint') { ensurePaint(); setLook('painted'); }
+  renderMaterials();
+  renderPalette();
+  updatePaintInfo();
+  renderFinish();
+  updateButtons();
+  setMouse();
+}
+
+function finishSettings(): FinishSettings {
+  const n = (id: string, lo: number, hi: number, d: number) => { const v = Number($<HTMLInputElement>(id).value); return Number.isFinite(v) && v > 0 ? Math.max(lo, Math.min(hi, v)) : d; };
+  const base = ($('finish-base').querySelector<HTMLButtonElement>('button.active')?.dataset.base ?? 'none') as FinishSettings['base'];
+  return {
+    sheet: n('finish-sheet', 0.2, 20, FINISH_DEFAULTS.sheet),
+    fillHollows: $<HTMLInputElement>('finish-hollows').checked,
+    closeGaps: $<HTMLInputElement>('finish-gaps').checked ? n('finish-gap-mm', 0.1, 20, 1) : 0,
+    loose: $<HTMLInputElement>('finish-loose').checked ? n('finish-loose-pct', 0.1, 100, 1) : 0,
+    flatten: $<HTMLInputElement>('finish-flatten').checked ? n('finish-flatten-mm', 0.1, 50, 0.6) : 0,
+    base,
+    baseHeight: n('finish-base-height', 0.4, 30, FINISH_DEFAULTS.baseHeight),
+    baseMargin: Math.max(0, Math.min(50, Number($<HTMLInputElement>('finish-base-margin').value) || 0)),
+  };
+}
+
+/** The Finish tab's settings as they were last time. */
+function loadFinishSettings() {
+  let saved: Record<string, unknown> = {};
+  try { saved = JSON.parse(localStorage.getItem(FINISH_KEY) ?? '{}'); } catch { /* the defaults */ }
+  for (const [id, v] of Object.entries(saved)) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (!el || el.tagName !== 'INPUT') continue;
+    if (el.type === 'checkbox') el.checked = !!v; else if (typeof v === 'string' || typeof v === 'number') el.value = String(v);
+  }
+  if (typeof saved.base === 'string') for (const b of $('finish-base').querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('active', b.dataset.base === saved.base);
+  showFinishRows();
+}
+function saveFinishSettings() {
+  const out: Record<string, unknown> = {};
+  for (const el of $('tab-finish').querySelectorAll<HTMLInputElement>('input')) out[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+  out.base = finishSettings().base;
+  try { localStorage.setItem(FINISH_KEY, JSON.stringify(out)); } catch { /* not kept */ }
+}
+function showFinishRows() {
+  $('finish-gaps-row').classList.toggle('hidden', !$<HTMLInputElement>('finish-gaps').checked);
+  $('finish-loose-row').classList.toggle('hidden', !$<HTMLInputElement>('finish-loose').checked);
+  $('finish-flatten-row').classList.toggle('hidden', !$<HTMLInputElement>('finish-flatten').checked);
+  $('finish-base-rows').classList.toggle('hidden', finishSettings().base === 'none');
+}
+for (const el of $('tab-finish').querySelectorAll<HTMLInputElement>('input')) el.addEventListener('change', () => { showFinishRows(); saveFinishSettings(); renderFinish(); });
+for (const b of $('finish-base').querySelectorAll<HTMLButtonElement>('button')) b.onclick = () => {
+  for (const x of $('finish-base').querySelectorAll('button')) x.classList.toggle('active', x === b);
+  showFinishRows(); saveFinishSettings(); renderFinish();
+};
+for (const b of $('finish-show').querySelectorAll<HTMLButtonElement>('button')) b.onclick = () => show(b.dataset.show as 'original' | 'finished');
+
+/** The original: the one shown, or the one put aside while the watertight one is. */
+const originalSlot = (): Loaded | null => (shown === 'original' ? loaded : other?.loaded ?? null);
+
+function renderFinish() {
+  const o = originalSlot();
+  if (!o) { $('finish-check').textContent = 'Open a model first.'; $('finish-result').classList.add('hidden'); return; }
+  // how far the original is from a closed solid (looked at once)
+  o.check ??= openEdges(o.model.mesh);
+  const { open, overused } = o.check;
+  $('finish-check').textContent = !open && !overused
+    ? 'Its surface is closed already, though parts may still cross inside it: making it watertight joins them into one solid.'
+    : `It has ${open ? plural(open, 'open edge') : ''}${open && overused ? ' and ' : ''}${overused ? plural(overused, 'edge') + ' where more than two triangles meet' : ''}: slicers may print it with walls inside or holes.`;
+  const box = $('finish-result');
+  box.classList.toggle('hidden', !finishInfo);
+  if (!finishInfo) return;
+  for (const b of $('finish-show').querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('active', b.dataset.show === shown);
+  const changed = finishInfo.from !== changes;
+  const stale = changed || finishInfo.request !== JSON.stringify(finishSettings());
+  $('finish-stale').classList.toggle('hidden', !stale);
+  $('finish-stale').textContent = changed
+    ? 'The original changed since this was made (its size, turn or paint): make it again to take that in.'
+    : 'Made with other settings than these: make it again to see the change.';
+  const f = shown === 'finished' ? loaded : other?.loaded;
+  const P = f?.model.mesh.positions;
+  let size = '';
+  if (P) {
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < P.length; i += 3) for (let d = 0; d < 3; d++) { lo[d] = Math.min(lo[d], P[i + d]); hi[d] = Math.max(hi[d], P[i + d]); }
+    size = `${(hi[0] - lo[0]).toFixed(1)} × ${(hi[1] - lo[1]).toFixed(1)} × ${(hi[2] - lo[2]).toFixed(1)} mm`;
+  }
+  const r = finishInfo.out;
+  const cm3 = (mm3: number) => (mm3 / 1000 >= 100 ? Math.round(mm3 / 1000).toLocaleString() : (mm3 / 1000).toPrecision(3));
+  const rows: [string, string][] = [
+    ['Triangles', `${finishInfo.triangles.toLocaleString()} (from ${finishInfo.before.toLocaleString()})`],
+    ['Size', size],
+    ['Volume', `${cm3(r.volume)} cm³`],
+    ['Separate pieces', String(r.shells)],
+  ];
+  if (r.hollows) rows.push(['Hollows filled', String(r.hollows)]);
+  if (r.gapVolume) rows.push(['Gaps closed', `${cm3(r.gapVolume)} cm³`]);
+  if (r.looseRemoved) rows.push(['Loose bits removed', String(r.looseRemoved)]);
+  $('finish-stats').replaceChildren(...rows.map(([k, v]) => h('li', null, h('span', null, k), h('b', null, v))));
+  $('finish-notes').replaceChildren(...r.notes.map((n) => h('li', null, n)));
+}
+
+async function runFinish() {
+  if (!loaded || jobs.busy) return;
+  // it is always made from the original
+  if (shown === 'finished') show('original');
+  const l = loaded;
+  const settings = finishSettings();
+  const request = JSON.stringify(settings);
+  const from = changes;
+  const t0 = performance.now();
+  progress('Making it watertight…', 0.01, () => jobs.cancel());
+  status(`Making ${l.model.name} watertight…`);
+  $<HTMLButtonElement>('finish-run').disabled = true;
+  try {
+    const out = await jobs.finish(l.model.faceGroup, paint ? { colour: paint.faceMaterial.slice(), codes: new Map(paint.codes) } : null, settings, l.model.materials.length, (f, m) => progress(m, f));
+    progress('Showing it…', 0.99);
+    await frame();
+    dropOther();
+    const m = out.model;
+    const materials = l.model.materials.slice(), pictures = l.pictures.slice(), use = l.use.slice();
+    if (settings.base !== 'none') { materials.push({ name: 'Base', colour: [205, 205, 205] }); pictures.push(null); use.push('none'); }
+    const model: ImportedModel = {
+      name: l.model.name, format: `${l.model.format}, made watertight`, mesh: m.mesh, uvs: m.uvs, vertexColours: m.vertexColours,
+      faceMaterial: m.faceMaterial, faceGroup: m.faceGroup, materials, units: 'mm', notes: [],
+    };
+    const fl: Loaded = { model, original: model.mesh.positions.slice(), turn: IDENTITY.slice(), scale: 1, pictures, use, textured: null as unknown as TexturedView };
+    fl.textured = new TexturedView(model, looks(fl));
+    let fp: PaintView | null = null, fpick: Picker | null = null;
+    if (m.paint) {
+      fp = new PaintView(model.mesh, palette);
+      fp.restore(m.paint.colour, m.paint.codes);
+      fp.onChange = onPaintChange;
+      fpick = new Picker(stage.renderer, fp);
+    }
+    other = { loaded: fl, paint: fp, picker: fpick, look: fp ? look : 'original', palette: palette.slice() };
+    const { model: _model, ...rest } = out;
+    finishInfo = { request, from, out: rest, triangles: model.mesh.triangles.length / 3, before: l.model.mesh.triangles.length / 3 };
+    show('finished');
+    const secs = (performance.now() - t0) / 1000;
+    status(`Watertight in ${secs.toFixed(1)} s: ${plural(model.mesh.triangles.length / 3, 'triangle')}${out.shells > 1 ? `, ${out.shells} separate pieces` : ''}. This is the model painted and saved now; Original on the Finish tab goes back.`);
+  } catch (e) {
+    status(e instanceof Cancelled ? 'Making it watertight stopped.' : `It couldn't be made watertight: ${errorText(e)}`);
+  } finally {
+    progress(null);
+    updateButtons();
+  }
+}
+$('finish-run').onclick = () => void runFinish();
+loadFinishSettings();
+
 // ---------- the paint ----------
 function ensurePaint() {
   if (paint || !loaded) return;
@@ -551,6 +758,7 @@ function ensurePaint() {
 
 let infoTimer = 0;
 function onPaintChange() {
+  if (shown === 'original' && !switching) changes++;
   stage.render();
   updateHistory();
   clearTimeout(infoTimer);
@@ -599,6 +807,7 @@ function updateButtons() {
   $<HTMLButtonElement>('prepare-texture').disabled = !has || !loaded!.use.some((u, i) => u === 'texture' && loaded!.pictures[i]);
   $<HTMLButtonElement>('paint-textures').disabled = !has || !anyPaintSource() || jobs.busy;
   for (const id of ['export-3mf', 'export-stl']) $<HTMLButtonElement>(id).disabled = !has;
+  $<HTMLButtonElement>('finish-run').disabled = !has || jobs.busy;
   $<HTMLButtonElement>('export-split').disabled = !paint;
   updateHistory();
 }
@@ -725,7 +934,8 @@ window.addEventListener('blur', () => { if (spaceHeld) { spaceHeld = false; setM
 function setTab(name: string) {
   tab = name;
   for (const x of document.querySelectorAll<HTMLButtonElement>('.tabs button')) x.classList.toggle('active', x.dataset.tab === name);
-  for (const t of ['model', 'textures', 'paint']) $(`tab-${t}`).classList.toggle('hidden', t !== name);
+  for (const t of ['model', 'finish', 'textures', 'paint']) $(`tab-${t}`).classList.toggle('hidden', t !== name);
+  if (name === 'finish') renderFinish();
   if (name === 'paint' && loaded) { ensurePaint(); setLook('painted'); renderPalette(); updatePaintInfo(); }
   if (name !== 'paint') { paint?.showBrush(null, 0); clearCorners(); }
   view.classList.toggle('painting', name === 'paint');

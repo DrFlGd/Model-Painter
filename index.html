@@ -13,6 +13,7 @@
       <div class="title"><h1>Model Painter</h1><span class="subtitle" id="subtitle">paint models for colour printing</span></div>
       <nav class="tabs segmented" aria-label="Mode">
         <button data-tab="model" class="active">Model</button>
+        <button data-tab="finish" id="finish-tab-button">Finish</button>
         <button data-tab="textures" id="textures-tab-button">Textures</button>
         <button data-tab="paint" id="paint-tab-button">Paint</button>
       </nav>
@@ -53,6 +54,51 @@
             </div>
             <div class="row"><button id="turn-reset" disabled>As it came</button></div>
             <p class="small muted">It always stands on the plate. Paint stays where it is when the model is turned or resized.</p>
+          </div>
+        </section>
+
+        <!-- ============ Finish ============ -->
+        <section id="tab-finish" class="tab hidden">
+          <div class="step">
+            <h2><span class="n">1</span>Make it watertight</h2>
+            <p id="finish-check" class="small muted">Open a model first.</p>
+            <p class="small muted">Game models are made of parts pushed into each other and open sheets, which slicers print as walls inside it or not at all. This wraps it into one closed solid, keeping its surface, paint and textures as they are.</p>
+            <label class="check"><input type="checkbox" id="finish-hollows" checked /><span>Fill hollows sealed inside it<small class="block muted">Space shut inside, as between a body and a coat over it.</small></span></label>
+            <label class="check"><input type="checkbox" id="finish-gaps" /><span>Close narrow gaps<small class="block muted">Slits between parts, like a sleeve and the arm in it, bridged under the surface.</small></span></label>
+            <div class="field sub" id="finish-gaps-row"><span>Gaps up to</span><span class="val"><input type="number" id="finish-gap-mm" min="0.1" max="20" step="0.25" value="1" /><span class="unit">mm</span></span></div>
+            <label class="check"><input type="checkbox" id="finish-loose" /><span>Remove loose bits<small class="block muted">Separate pieces too small to print on their own.</small></span></label>
+            <div class="field sub" id="finish-loose-row"><span>Smaller than</span><span class="val"><input type="number" id="finish-loose-pct" min="0.1" max="100" step="0.5" value="1" /><span class="unit">% of it</span></span></div>
+            <div class="field"><span>Open surfaces made</span><span class="val"><input type="number" id="finish-sheet" min="0.2" max="20" step="0.2" value="1.2" /><span class="unit">mm thick</span></span></div>
+          </div>
+          <div class="step">
+            <h2><span class="n">2</span>Stand it on the plate</h2>
+            <label class="check"><input type="checkbox" id="finish-flatten" /><span>Cut the bottom flat<small class="block muted">So uneven feet stand on a flat face.</small></span></label>
+            <div class="field sub" id="finish-flatten-row"><span>Cut off</span><span class="val"><input type="number" id="finish-flatten-mm" min="0.1" max="50" step="0.1" value="0.6" /><span class="unit">mm</span></span></div>
+            <span class="field-label">Base</span>
+            <div class="segmented" id="finish-base" role="group" aria-label="Base">
+              <button type="button" data-base="none" class="active">None</button>
+              <button type="button" data-base="round">Round</button>
+              <button type="button" data-base="square">Square</button>
+            </div>
+            <div id="finish-base-rows">
+              <div class="field"><span>Thickness</span><span class="val"><input type="number" id="finish-base-height" min="0.4" max="30" step="0.5" value="3" /><span class="unit">mm</span></span></div>
+              <div class="field"><span>Past the feet</span><span class="val"><input type="number" id="finish-base-margin" min="0" max="50" step="0.5" value="3" /><span class="unit">mm</span></span></div>
+              <p class="small muted">It is painted colour 1; paint it like the rest of the model.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="actions"><button id="finish-run" class="primary" disabled>Make watertight</button></div>
+            <div id="finish-result" class="hidden">
+              <span class="field-label">Show</span>
+              <div class="segmented" id="finish-show" role="group" aria-label="Show">
+                <button type="button" data-show="original">Original</button>
+                <button type="button" data-show="finished" class="active">Watertight</button>
+              </div>
+              <p id="finish-stale" class="small warn hidden">Made from the model as it was before: make it again to take in what changed since.</p>
+              <ul id="finish-stats" class="kv"></ul>
+              <ul id="finish-notes" class="notes info"></ul>
+              <p class="small muted">The watertight model is the one painted and saved while it is shown; the original keeps its own paint.</p>
+            </div>
           </div>
         </section>
 

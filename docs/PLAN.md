@@ -14,7 +14,28 @@
   model, drag and drop, the file it was opened with); Windows installer and
   portable zip from the workflow.
 
+## 0.1.1 (built)
+
+- Move round the model (middle drag, Shift + right drag, Space + drag, the
+  Move button); click a colour to use it, the arrow beside it to edit it;
+  four fill modes (up to creases, same colour, flat area, whole part).
+
+## 0.2 (built)
+
+- Finish tab, ported from Dark STL's finishing: each part made solid (closed,
+  openings closed flat, sheets thickened, broken parts rebuilt from voxels),
+  joined into one solid with manifold-3d; hollows filled, narrow gaps
+  bridged, loose bits removed; bottom cut flat; round or square base.
+- Provenance through manifold-3d (faceID per model triangle) carries paint,
+  UVs and materials onto the watertight model (finish-map.ts); new surfaces
+  take them from the nearest of the model facing their way.
+- Original and watertight models both kept, each with its own paint and
+  palette.
+
 ## Next
+
+- Decide with Jerred whether finishing and painting leave Dark STL for good
+  now that Model Painter has them.
 
 - Smooth (non-faceted) shading in the paint view for organic models.
 - Show the reduced textures on the model inside Prepare texture.

@@ -190,7 +190,7 @@ export async function importGltf(src: FileSource): Promise<ImportedModel> {
   for (const r of roots) visit(r, zUp);
   if (!placed.length && !scenes.length) (gltf.meshes ?? []).forEach((_: Json, i: number) => placed.push({ mesh: i, matrix: zUp }));
   let skipped = 0;
-  for (const { mesh, matrix } of placed) {
+  for (const [group, { mesh, matrix }] of placed.entries()) {
     for (const prim of gltf.meshes?.[mesh]?.primitives ?? []) {
       const mode = prim.mode ?? 4;
       if (mode < 4 || prim.attributes?.POSITION === undefined) { skipped++; continue; }
@@ -209,7 +209,7 @@ export async function importGltf(src: FileSource): Promise<ImportedModel> {
         for (let i = 0; i < colours.length; i++) if (i % width < 3) colours[i] = linearToSrgb(colours[i]);
       }
       const material = await materialFor(prim.material);
-      builder.add({ positions, indices, uvs, colours, colourWidth: width, colourScale: 1, material, matrix });
+      builder.add({ positions, indices, uvs, colours, colourWidth: width, colourScale: 1, material, matrix, group });
     }
   }
   if (skipped) notes.push(`${skipped} parts that aren't triangles (or are compressed) were left out.`);
