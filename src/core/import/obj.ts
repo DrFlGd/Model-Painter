@@ -49,6 +49,9 @@ export async function importObj(src: FileSource): Promise<ImportedModel> {
   let anyColour = false;
   const corners: number[] = []; // (v, vt) per triangle corner, 0-based, −1 for none
   const faceMaterial: number[] = [];
+  const faceGroup: number[] = [];
+  const groupIds = new Map<string, number>();
+  let group = 0;
   const materialNames: string[] = [];
   const materialIds = new Map<string, number>();
   const mtllibs: string[] = [];
@@ -92,12 +95,18 @@ export async function importObj(src: FileSource): Promise<ImportedModel> {
       for (let k = 1; k + 1 < refs.length; k++) {
         corners.push(refs[0][0], refs[0][1], refs[k][0], refs[k][1], refs[k + 1][0], refs[k + 1][1]);
         faceMaterial.push(material);
+        faceGroup.push(group);
       }
     } else if (tag === 'usemtl') {
       const name = rest.trim();
       let id = materialIds.get(name);
       if (id === undefined) { id = materialNames.length; materialIds.set(name, id); materialNames.push(name); }
       material = id;
+    } else if (tag === 'o' || tag === 'g') {
+      const name = rest.trim() || 'default';
+      let id = groupIds.get(name);
+      if (id === undefined) { id = groupIds.size; groupIds.set(name, id); }
+      group = id;
     } else if (tag === 'mtllib') mtllibs.push(rest.trim());
   }
   if (!faceMaterial.length) throw new Error(`${src.name} has no faces`);
@@ -145,7 +154,7 @@ export async function importObj(src: FileSource): Promise<ImportedModel> {
     const t = corners[c * 2 + 1];
     if (uvs && t >= 0 && t < vt.length / 2) { uvs[c * 2] = vt[t * 2]; uvs[c * 2 + 1] = vt[t * 2 + 1]; }
   }
-  builder.add({ positions, uvs, colours, colourScale: 1, material: faceMaterial });
+  builder.add({ positions, uvs, colours, colourScale: 1, material: faceMaterial, group: faceGroup });
   const model = builder.build(stem(src.name), 'Wavefront OBJ', 'm');
   if (unitsPerMetre === 1000) model.units = 'mm';
   return model;

@@ -49,6 +49,8 @@ export interface ImportedModel {
   vertexColours: Uint8Array | null;
   /** the material of every triangle */
   faceMaterial: Uint16Array;
+  /** the part of the file every triangle is in (a mesh, an object): finishing makes each part solid on its own when they tangle */
+  faceGroup: Uint32Array;
   materials: ModelMaterial[];
   paint?: ModelPaint;
   /** the unit the file's numbers are in, when it says or it can be told: a print is sized from it */
@@ -170,6 +172,8 @@ export interface Primitive {
   colourScale?: number;
   /** a material for all of it, or one per triangle */
   material: number | ArrayLike<number>;
+  /** the file's part it is in, or one per triangle; missing: a part of its own */
+  group?: number | ArrayLike<number>;
   /** a 4 × 4 matrix (column-major, as glTF and three.js keep them) to place it */
   matrix?: ArrayLike<number> | null;
 }
@@ -181,6 +185,8 @@ export class ModelBuilder {
   private uv = new Grow(Float32Array, 6 * 4096);
   private col = new Grow(Uint8Array, 9 * 4096);
   private mat = new Grow(Uint16Array, 4096);
+  private grp = new Grow(Uint32Array, 4096);
+  private groups = 0;
   private anyUv = false;
   private anyColour = false;
   materials: ModelMaterial[] = [];
@@ -213,7 +219,8 @@ export class ModelBuilder {
     const U = p.uvs, C = p.colours, cw = p.colourWidth ?? 3, cs = p.colourScale ?? 255;
     if (U) this.anyUv = true;
     if (C) this.anyColour = true;
-    this.tri.reserve(nt * 3); this.uv.reserve(nt * 6); this.col.reserve(nt * 9); this.mat.reserve(nt);
+    this.tri.reserve(nt * 3); this.uv.reserve(nt * 6); this.col.reserve(nt * 9); this.mat.reserve(nt); this.grp.reserve(nt);
+    const G = p.group ?? this.groups;
     for (let t = 0; t < nt; t++) {
       let a = at(t * 3), b = at(t * 3 + 1), c = at(t * 3 + 2);
       if (a >= nv || b >= nv || c >= nv) continue;
@@ -225,6 +232,9 @@ export class ModelBuilder {
         else { this.col.push(255); this.col.push(255); this.col.push(255); }
       }
       this.mat.push(typeof p.material === 'number' ? p.material : p.material[t] ?? 0);
+      const g = typeof G === 'number' ? G : G[t] ?? 0;
+      this.grp.push(g);
+      if (g >= this.groups) this.groups = g + 1;
     }
   }
 
@@ -243,6 +253,7 @@ export class ModelBuilder {
       uvs: this.anyUv ? pickFaces(this.uv.done(), 6, kept) : null,
       vertexColours: this.anyColour ? pickFaces(this.col.done(), 9, kept) : null,
       faceMaterial: pickFaces(this.mat.done(), 1, kept),
+      faceGroup: pickFaces(this.grp.done(), 1, kept),
     };
   }
 }
