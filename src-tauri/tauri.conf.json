@@ -28,7 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "category": "Graphics",
+    "category": "GraphicsAndDesign",
     "shortDescription": "Paint 3D models for colour printing",
     "longDescription": "Open a model in glTF, OBJ, FBX, Collada, 3DS, PLY, PSK, STL or 3MF with its textures, paint it from them or by hand, and save a painted 3MF for Bambu Studio, OrcaSlicer or PrusaSlicer.",
     "icon": [
