@@ -1,12 +1,16 @@
-// The texture work, off the page's thread: reading pictures, suggesting the
-// colours, reducing a texture for the Prepare texture dialog, and painting
-// the model from its textures (core/texpaint.ts). It keeps the model it was
-// last given, so the dialog's many small requests send only their settings.
+// The long work, off the page's thread: reading pictures, suggesting the
+// colours, reducing a texture for the Prepare texture dialog, painting the
+// model from its textures (core/texpaint.ts), and making it watertight
+// (core/finish.ts, with its paint carried over by core/finish-map.ts). It
+// keeps the model it was last given, so the dialog's many small requests
+// send only their settings.
 
 import { decodePicture, setBrowserDecoder } from '../core/images/index.ts';
 import { MAX_TEXTURE, paintModel, reduce, shrink, suggestPalette, type PaintInput, type Picture } from '../core/texpaint.ts';
 import { parseHex } from '../core/colour.ts';
-import type { Request } from './texture-jobs.ts';
+import { makeWatertight } from '../core/finish.ts';
+import { mapFinished } from '../core/finish-map.ts';
+import type { FinishOutput, Request } from './texture-jobs.ts';
 import { browserDecoder } from './decode.ts';
 
 setBrowserDecoder(browserDecoder);
@@ -45,6 +49,22 @@ self.onmessage = async (e: MessageEvent<Request>) => {
       case 'paint': {
         if (!input) throw new Error('no model');
         post({ id: r.id, result: paintModel(input, r.settings, r.suggestion, progress) });
+        break;
+      }
+      case 'finish': {
+        if (!input) throw new Error('no model');
+        const fin = await makeWatertight(input.mesh, r.groups, r.settings, (f, m) => progress(f * 0.8, m));
+        progress(0.82, 'Carrying the paint and textures over');
+        const model = mapFinished({
+          mesh: input.mesh, uvs: input.uvs, vertexColours: input.vertexColours ?? null, faceMaterial: input.faceMaterial, faceGroup: r.groups,
+          paint: r.paint, baseMaterial: r.baseMaterial,
+        }, fin, (f) => progress(0.82 + f * 0.17, 'Carrying the paint and textures over'));
+        const result: FinishOutput = { model, notes: fin.notes, volume: fin.volume, shells: fin.shells, hollows: fin.hollows, gapVolume: fin.gapVolume, looseRemoved: fin.looseRemoved };
+        const transfer: Transferable[] = [model.mesh.positions.buffer, model.mesh.triangles.buffer, model.faceMaterial.buffer, model.faceGroup.buffer];
+        if (model.uvs) transfer.push(model.uvs.buffer);
+        if (model.vertexColours) transfer.push(model.vertexColours.buffer);
+        if (model.paint) transfer.push(model.paint.colour.buffer);
+        post({ id: r.id, result }, transfer as ArrayBuffer[]);
         break;
       }
     }

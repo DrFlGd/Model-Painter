@@ -686,15 +686,17 @@ function removeLoose(o: Origins, s: Manifold, percent: number): { solid: Manifol
 }
 
 /**
- * A base under the solid: round or square, round its foot (its outline just
- * above its lowest point) with the margin, the model sunk SINK into it so
- * what nearly touches the plate joins on too.
+ * A base under the solid: round or square, round its feet (what of it is in
+ * the lowest tenth of its height, seen from above) with the margin, the model
+ * sunk SINK into it so what nearly touches the plate joins on too.
  */
 function addBase(o: Origins, s: Manifold, settings: FinishSettings): { solid: Manifold; note: string } {
   const bb = s.boundingBox();
   const z0 = bb.min[2];
-  const foot = s.slice(z0 + Math.min(1, (bb.max[2] - z0) * 0.02)).toPolygons();
-  const pts: number[][] = foot.flat();
+  const low = s.trimByPlane([0, 0, -1], -(z0 + Math.max(0.5, (bb.max[2] - z0) * 0.1)));
+  const shadow = low.project();
+  const pts: number[][] = shadow.toPolygons().flat();
+  shadow.delete(); low.delete();
   if (!pts.length) pts.push([bb.min[0], bb.min[1]], [bb.max[0], bb.max[1]]);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }

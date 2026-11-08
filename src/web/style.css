@@ -302,3 +302,15 @@ button.icon.on, button.on { background: var(--accent-soft); color: var(--accent)
 
 .view-hint { position: absolute; right: 10px; top: 52px; max-width: calc(100% - 20px); text-align: right; pointer-events: none; z-index: 1; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--panel) 80%, transparent); }
 .view-hint:empty { display: none; }
+
+/* the Finish tab */
+label.check + label.check, .field + label.check, label.check + .field-label { margin-top: 10px; }
+label.check small.block, .block { display: block; margin-top: 2px; font-size: 11.5px; }
+.field.sub { margin: 6px 0 0 28px; }
+.warn { color: var(--warn); }
+.notes.info { color: var(--muted); }
+.kv { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; }
+.kv li { display: contents; }
+.kv li span { color: var(--muted); }
+.kv li b { font-weight: 560; font-variant-numeric: tabular-nums; text-align: right; }
+#finish-show { margin-top: 6px; }

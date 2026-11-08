@@ -52,7 +52,7 @@ const stateOf = (m: number) => m + 1;
 const colourOf = (s: number) => Math.max(0, s - 1);
 
 /** The finished mesh with the model's UVs, colours, materials and paint on it. `source`: each triangle's model triangle, −1, or BASE. */
-export function mapFinished(src: FinishSource, finished: { mesh: IndexedMesh; source: Int32Array }): FinishedModel {
+export function mapFinished(src: FinishSource, finished: { mesh: IndexedMesh; source: Int32Array }, progress?: (fraction: number) => void): FinishedModel {
   const P = src.mesh.positions, T = src.mesh.triangles;
   const Q = finished.mesh.positions, U = Uint32Array.from(finished.mesh.triangles);
   const n = U.length / 3;
@@ -63,6 +63,7 @@ export function mapFinished(src: FinishSource, finished: { mesh: IndexedMesh; so
   let index: SurfaceIndex | null = null, qn: Float32Array | null = null;
   for (let t = 0; t < n; t++) {
     if (source[t] >= 0 || source[t] === BASE) continue;
+    if (progress && (nearest & 32767) === 0) progress((0.6 * t) / n);
     index ??= new SurfaceIndex(P, T, normals);
     qn ??= triangleNormals(Q, U);
     const a = U[t * 3] * 3, b = U[t * 3 + 1] * 3, c = U[t * 3 + 2] * 3;
@@ -154,6 +155,7 @@ export function mapFinished(src: FinishSource, finished: { mesh: IndexedMesh; so
     const xyz = new Float64Array(9);
     for (let t = 0; t < n; t++) {
       const s = source[t];
+      if (progress && (t & 32767) === 0) progress(0.6 + (0.4 * t) / n);
       if (s === BASE) continue;
       const code = codes.get(s);
       if (!code) { colour[t] = C[s]; continue; }

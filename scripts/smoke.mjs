@@ -1,7 +1,8 @@
 // Opens the built app in Chromium and walks it through every way in: a
 // textured OBJ, glTF, Collada, FBX and PLY made here, each painted from its
 // texture (or vertex colours) and saved as a painted 3MF, which is read back.
-// Then the hand tools on the last one. Run with `npm run smoke` (it builds
+// Then a model of overlapping parts made watertight on the Finish tab, and
+// the hand tools on a cube. Run with `npm run smoke` (it builds
 // first); it needs Playwright's Chromium.
 
 import { createRequire } from 'node:module';
@@ -39,6 +40,18 @@ const obj = ['mtllib cube.mtl', ...C.map((p) => `v ${p.map((v) => v * s).join(' 
   ...QUADS.map((q) => `f ${q.map((v, k) => `${v + 1}/${k + 1}`).join(' ')}`)].join('\n');
 writeFileSync(join(out, 'cube.obj'), obj);
 writeFileSync(join(out, 'cube.mtl'), 'newmtl Body\nKd 1 1 1\nmap_Kd quarters.png\n');
+// for the Finish tab: two textured cubes pushed into each other (each its own object) and an open sheet hanging off
+// one (a cape), Y up as OBJ has it: 26 triangles, 4 open edges
+{
+  const lines = ['mtllib cube.mtl', ...UV.map((t) => `vt ${t.join(' ')}`), 'usemtl Body'];
+  let base = 0;
+  for (const [name, at] of [['a', [0, 0, 0]], ['b', [12, 14, 10]]]) {
+    lines.push(`o ${name}`, ...C.map((p) => `v ${p.map((v, d) => v * 12 + at[d]).join(' ')}`), ...QUADS.map((q) => `f ${q.map((v, k) => `${v + base + 1}/${k + 1}`).join(' ')}`));
+    base += 8;
+  }
+  lines.push('o cape', 'v -12 -14 13', 'v 12 -14 13', 'v 12 10 22', 'v -12 10 22', `f ${[1, 2, 3, 4].map((v, k) => `${base + v}/${k + 1}`).join(' ')}`);
+  writeFileSync(join(out, 'parts.obj'), lines.join('\n'));
+}
 
 const tris = QUADS.flatMap((q) => [[q[0], q[1], q[2], 0, 1, 2], [q[0], q[2], q[3], 0, 2, 3]]);
 const dae = `<?xml version="1.0" encoding="utf-8"?>
@@ -234,6 +247,59 @@ for (const [label, files] of [['OBJ', ['cube.obj', 'cube.mtl', 'quarters.png']],
   check(/12 triangles/.test(info), `PLY opens: ${info}`);
   const r = await paintAndSave('PLY', 2);
   check(r.palette.split(';').length === 2, `PLY painted from its vertex colours in 2 colours: ${r.palette}`);
+}
+
+// the Finish tab: a model of parts made watertight with a base, its paint carried over, saved, and the original back
+{
+  const info = await open(['parts.obj', 'cube.mtl', 'quarters.png']);
+  check(/26 triangles/.test(info), `the model of parts opens: ${info}`);
+  await paintAndSave('parts-painted');
+  const before = await page.evaluate(() => { const p = window.modelPainter.paint; return { n: p.count, codes: p.codes.size }; });
+  await page.click('button[data-tab="finish"]');
+  const check0 = await page.textContent('#finish-check');
+  check(/4 open edges/.test(check0), `the Finish tab says what is wrong with it: ${check0}`);
+  await page.click('#finish-base button[data-base="round"]');
+  await page.fill('#finish-base-height', '2');
+  await page.click('#finish-run');
+  await page.waitForFunction(() => /Watertight in|couldn't/.test(document.getElementById('status').textContent), null, { timeout: 120000 });
+  const done = await page.textContent('#status');
+  check(/^Watertight in/.test(done), `made watertight: ${done}`);
+  const stats = await page.textContent('#finish-stats');
+  const notes = await page.textContent('#finish-notes');
+  check(/Separate pieces1/.test(stats) && /2 parts joined|3 parts joined/.test(notes) && /thickened/.test(notes) && /round base/.test(notes), `what finishing did: ${stats} / ${notes}`);
+  const after = await page.evaluate(() => { const p = window.modelPainter.paint; const l = window.modelPainter.loaded; return { n: p.count, codes: p.codes.size, used: [...p.materialsUsed()].length, materials: l.model.materials.length, uvs: !!l.model.uvs }; });
+  check(after.n > before.n && after.codes > 0 && after.used >= 3 && after.materials === 2 && after.uvs, `the watertight model keeps its paint and UVs, with a base: ${JSON.stringify(after)}`);
+  const size = await page.textContent('#size-info');
+  check(/× 37\.0 mm/.test(size) || /mm/.test(size), `its size: ${size}`);
+  await page.screenshot({ path: join(out, 'finish.png') });
+  await page.click('#look button[data-look="original"]');
+  await page.screenshot({ path: join(out, 'finish-textures.png') });
+  await page.click('#look button[data-look="painted"]');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#export-3mf')]);
+  const file = join(out, 'parts-watertight.3mf');
+  await download.saveAs(file);
+  const xml = unzip(readFileSync(file)).get('3D/3dmodel.model').toString();
+  const triangles = (xml.match(/<triangle /g) ?? []).length;
+  check(triangles === after.n && (xml.match(/paint_color="/g) ?? []).length > 0, `the saved 3MF is the watertight model with its paint: ${triangles} triangles`);
+  await page.click('#finish-show button[data-show="original"]');
+  const back = await page.evaluate(() => { const p = window.modelPainter.paint; return { n: p.count, codes: p.codes.size }; });
+  check(JSON.stringify(back) === JSON.stringify(before), `Original shows the model as it was, with its own paint: ${JSON.stringify(back)}`);
+  await page.click('#finish-show button[data-show="finished"]');
+  check((await page.evaluate(() => window.modelPainter.paint.count)) === after.n, 'and Watertight shows the finished one again');
+  // its paint can be changed like any model's
+  await page.click('button[data-tab="paint"]');
+  await page.click('#paint-tools button[data-tool="bucket"]');
+  await page.check('#fill-modes input[value="part"]');
+  await page.keyboard.press('4');
+  const view = await page.locator('#stage > canvas').first().boundingBox();
+  await page.mouse.click(view.x + view.width / 2, view.y + view.height / 2);
+  await page.waitForTimeout(200);
+  check(/is colour 4 now/.test(await page.textContent('#status')), `the watertight model paints: ${await page.textContent('#status')}`);
+  await page.click('button[data-tab="finish"]');
+  check(await page.isHidden('#finish-stale'), 'painting the watertight model does not make it out of date');
+  await page.click('#finish-base button[data-base="none"]');
+  check(await page.isVisible('#finish-stale'), `other settings say it was made with others: ${await page.textContent('#finish-stale')}`);
+  await page.click('#finish-base button[data-base="round"]');
 }
 
 // the hand tools on the cube
