@@ -25,10 +25,17 @@ Prepare image dialog).
    with how much of the model it covers (click to drop it, or change it to
    the filament you have), smoothing, specks, exposure, contrast, saturation
    and the smallest feature kept. **Paint the model** paints every triangle.
-3. **Paint**: up to 16 colours. Brush (only the side facing you, or both),
-   fill up to creases, corners, text, picture stamps (any picture goes
-   through **Prepare image**: background removal, colours, cleanup), and pick
-   a colour from the model. Undo and redo with Ctrl+Z and Ctrl+Y.
+3. **Paint**: up to 16 colours (click one to paint with it, its arrow to
+   change it). Brush (only the side facing you, or both); fill over the same
+   colour (to repaint one painted area), up to creases, over a flat area, or
+   a whole part; corners, text, picture stamps (any picture goes through
+   **Prepare image**: background removal, colours, cleanup), and pick a
+   colour from the model. Undo and redo with Ctrl+Z and Ctrl+Y.
+
+Moving round the model: the right button turns it while painting (the left
+elsewhere), the middle button, Shift with the turning button, Space with the
+left button, or the Move button (H) slides it, and the wheel zooms towards the
+mouse.
 4. **Save**: a painted 3MF (filament *n* is colour *n*; colour 1 is the
    object's own filament), a 3MF split into one solid part per colour (for a
    closed model), or an STL.

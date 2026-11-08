@@ -24,7 +24,7 @@ import { MAX_COLOURS } from '../core/paint-model.ts';
 import { painted3mf, parts3mf, stl } from '../core/export.ts';
 import { join } from '../core/zip-write.ts';
 import { splitByMaterial } from '../core/split-colours.ts';
-import { insidePolygon } from '../core/paint-fill.ts';
+import { insidePolygon, type FillMode, type FillRule } from '../core/paint-fill.ts';
 import type { StampView } from '../core/paint-model.ts';
 import type { RGB } from '../core/colour.ts';
 import { parseSvg } from '../vendor/svg.ts';
@@ -209,6 +209,7 @@ async function openSource(src: FileSource) {
   renderPalette();
   updatePaintInfo();
   updateButtons();
+  setMouse();
   status(model.paint ? `${model.name} is open with its paint.` : anyPaintSource()
     ? `${model.name} is open. The Textures tab paints it from its ${found ? 'textures' : 'colours'}; Paint paints it by hand.`
     : `${model.name} is open. It has no textures or colours to paint from: paint it by hand on the Paint tab${named ? ', or choose its textures on the Textures tab' : ''}.`);
@@ -606,11 +607,31 @@ function updateButtons() {
 function renderPalette() {
   const box = $('palette');
   box.replaceChildren(...palette.map((c, i) => {
-    const input = h('input', { type: 'color', value: hex(c), 'aria-label': `Colour ${i + 1}` });
-    input.addEventListener('input', () => { palette[i] = parseColour(input.value); paint?.setPalette(palette); stage.render(); updatePaintInfo(); if (tab === 'paint') updateHover(); });
-    const sw = h('label', { class: `swatch ${i === active ? 'active' : ''}`, title: `Colour ${i + 1}: filament ${i + 1}` }, h('span', { class: 'swatch-n' }, String(i + 1)), input);
-    sw.addEventListener('click', (e) => { if (e.target !== input) { active = i; renderPalette(); } else { active = i; for (const s of box.querySelectorAll('.swatch')) s.classList.toggle('active', s === sw); } });
-    return sw;
+    // the colour itself picks it to paint with; its arrow changes it
+    const colour = h('span', { class: 'swatch-colour' });
+    const pick = h('button', { type: 'button', class: 'swatch-pick', 'aria-pressed': String(i === active) }, colour, h('span', { class: 'swatch-n' }, String(i + 1)));
+    const input = h('input', { type: 'color', value: hex(c), tabindex: '-1', 'aria-hidden': 'true' });
+    const edit = h('button', { type: 'button', class: 'swatch-edit', title: `Change colour ${i + 1}`, 'aria-label': `Change colour ${i + 1}` },
+      h('span', { 'aria-hidden': 'true' }, '\u25be'));
+    const show = () => {
+      colour.style.background = hex(palette[i]);
+      pick.title = `Paint with colour ${i + 1} (${hex(palette[i]).toUpperCase()}), filament ${i + 1}`;
+    };
+    show();
+    pick.addEventListener('click', () => { if (active !== i) { active = i; renderPalette(); updateHover(); } });
+    edit.addEventListener('click', () => {
+      input.value = hex(palette[i]);
+      try { input.showPicker(); } catch { input.click(); }
+    });
+    input.addEventListener('input', () => {
+      palette[i] = parseColour(input.value);
+      show();
+      paint?.setPalette(palette);
+      stage.render();
+      updatePaintInfo();
+      if (tab === 'paint') updateHover();
+    });
+    return h('div', { class: `swatch ${i === active ? 'active' : ''}` }, pick, edit, input);
   }));
   $<HTMLButtonElement>('palette-add').disabled = palette.length >= MAX_COLOURS;
   $<HTMLButtonElement>('palette-remove').disabled = palette.length <= 1;
@@ -652,6 +673,54 @@ $('palette-remove').onclick = () => {
     }, 'Remove'));
 };
 
+// ---------- moving round the model ----------
+// Every tab: the middle button slides the view across, the wheel zooms to the
+// point under the mouse. Painting: the left button paints and the right turns
+// the view; elsewhere the left turns it and the right slides it. Shift or Ctrl
+// with the turning button slides instead. The Move button (H), or holding
+// Space, makes the left button slide the view in every tab.
+let moveOn = false;
+let spaceHeld = false;
+const moving = () => moveOn || spaceHeld;
+function setMouse() {
+  const slide = moving();
+  stage.controls.mouseButtons = tab === 'paint'
+    ? { LEFT: (slide ? THREE.MOUSE.PAN : null) as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+    : { LEFT: slide ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+  view.classList.toggle('moving', slide);
+  const move = $<HTMLButtonElement>('view-move');
+  move.classList.toggle('on', moveOn);
+  move.setAttribute('aria-pressed', String(moveOn));
+  $('view-hint').textContent = !loaded ? ''
+    : slide ? 'Drag: move the view · Scroll: zoom'
+    : tab === 'paint' ? 'Left: paint · Right: turn · Middle, Shift + right or Space + drag: move · Scroll: zoom'
+    : 'Left: turn · Right or middle: move · Scroll: zoom';
+  if (slide) { paint?.showBrush(null, 0); stage.render(); } else updateHover();
+}
+function setMoveOn(on: boolean) { moveOn = on; setMouse(); }
+$('view-move').onclick = () => setMoveOn(!moveOn);
+// a middle-button drag moves the view; it must not start the browser's own scrolling
+view.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+/** Whether keys pressed in `t` are typed into it (a text or number box, a list), so they are not shortcuts. */
+const typing = (t: EventTarget | null) => {
+  const el = t as HTMLElement | null;
+  if (!el) return false;
+  if (el.tagName === 'INPUT') return !['radio', 'checkbox', 'range', 'button', 'color', 'file'].includes((el as HTMLInputElement).type);
+  return el.tagName === 'SELECT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+};
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || typing(e.target) || document.querySelector('dialog[open]')) return;
+  e.preventDefault(); // not a click on the focused button, nor a scroll
+  if (!spaceHeld) { spaceHeld = true; setMouse(); }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space' || !spaceHeld) return;
+  e.preventDefault();
+  spaceHeld = false;
+  setMouse();
+});
+window.addEventListener('blur', () => { if (spaceHeld) { spaceHeld = false; setMouse(); } });
+
 // ---------- tabs ----------
 function setTab(name: string) {
   tab = name;
@@ -660,10 +729,7 @@ function setTab(name: string) {
   if (name === 'paint' && loaded) { ensurePaint(); setLook('painted'); renderPalette(); updatePaintInfo(); }
   if (name !== 'paint') { paint?.showBrush(null, 0); clearCorners(); }
   view.classList.toggle('painting', name === 'paint');
-  // painting: the left button paints, the right turns the view, the middle moves it
-  stage.controls.mouseButtons = name === 'paint'
-    ? { LEFT: null as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-    : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  setMouse();
   updateButtons();
   drawOverlay();
   stage.render();
@@ -698,6 +764,26 @@ function pair(slider: string, box: string, onChange?: () => void) {
 }
 pair('brush', 'brush-num', () => updateHover());
 pair('bucket-angle', 'bucket-angle-num');
+
+/** How the fill spreads: the mode picked (remembered between runs) and its angle. */
+const FILL_KEY = 'model-painter-fill';
+const fillMode = (): FillMode => ($<HTMLInputElement>('fill-modes').querySelector<HTMLInputElement>('input:checked')?.value ?? 'colour') as FillMode;
+const fillRule = (): FillRule => ({ mode: fillMode(), angle: Math.max(1, Math.min(180, Number($<HTMLInputElement>('bucket-angle-num').value) || num('bucket-angle'))) });
+function showFillMode() {
+  const m = fillMode();
+  $('bucket-angle-row').classList.toggle('hidden', m !== 'crease' && m !== 'flat');
+  $('bucket-angle-label').textContent = m === 'flat' ? 'Stop where it turns more than' : 'Stop at edges sharper than';
+}
+try {
+  const saved = localStorage.getItem(FILL_KEY);
+  const r = saved && $('fill-modes').querySelector<HTMLInputElement>(`input[value="${saved}"]`);
+  if (r) r.checked = true;
+} catch { /* no storage: the default */ }
+for (const r of $('fill-modes').querySelectorAll<HTMLInputElement>('input')) r.addEventListener('change', () => {
+  showFillMode();
+  try { localStorage.setItem(FILL_KEY, fillMode()); } catch { /* not kept */ }
+});
+showFillMode();
 pair('text-size', 'text-size-num', () => drawOverlay());
 pair('text-angle', 'text-angle-num', () => drawOverlay());
 pair('stamp-width', 'stamp-width-num', () => drawOverlay());
@@ -750,7 +836,7 @@ function brushAt(x: number, y: number): THREE.Vector3 | null {
 
 view.addEventListener('pointerdown', (e) => {
   if (tab !== 'paint' || !paint || !picker) return;
-  if (e.button === 2 || e.button === 1) { orbiting = true; paint.showBrush(null, 0); return; }
+  if (e.button === 2 || e.button === 1 || (e.button === 0 && moving())) { orbiting = true; paint.showBrush(null, 0); return; }
   if (e.button !== 0) return;
   const [x, y] = local(e);
   if (tool === 'brush') {
@@ -763,8 +849,12 @@ view.addEventListener('pointerdown', (e) => {
     if (!hit) { status('Click the model to fill a region of it.'); return; }
     paint.snapshot();
     const t0 = performance.now();
-    const n = paint.bucket(hit.face, hit.weights, active, num('bucket-angle'));
-    status(n ? `Filled ${plural(n, 'triangle')} (${(performance.now() - t0).toFixed(0)} ms).` : 'That region is that colour already.');
+    const rule = fillRule();
+    const was = rule.mode === 'part' ? -1 : paint.colourAt(hit.face, hit.weights);
+    const n = paint.bucket(hit.face, hit.weights, active, rule);
+    const ms = `${(performance.now() - t0).toFixed(0)} ms`;
+    if (!n) status(rule.mode === 'part' ? `That part is all colour ${active + 1} already.` : `That area is colour ${active + 1} already.`);
+    else status(rule.mode === 'part' ? `The part (${plural(paint.part(hit.face).length, 'triangle')}) is colour ${active + 1} now (${ms}).` : `Colour ${was + 1} there is colour ${active + 1} now: ${plural(n, 'triangle')} (${ms}).`);
   } else if (tool === 'pick') {
     const hit = picker.hit(stage.camera, x, y, stage.width, stage.height);
     if (!hit) return;
@@ -810,13 +900,14 @@ $('undo').onclick = () => { if (paint?.undo()) updatePaintInfo(); else status('N
 $('redo').onclick = () => { if (paint?.redo()) updatePaintInfo(); else status('Nothing to redo.'); };
 
 window.addEventListener('keydown', (e) => {
-  const target = e.target as HTMLElement;
-  if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || document.querySelector('dialog[open]')) return;
+  if (typing(e.target) || document.querySelector('dialog[open]')) return;
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); $(e.shiftKey ? 'redo' : 'undo').click(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); $('redo').click(); return; }
   if (mod) return;
   if (e.key === 'f' || e.key === 'F') { $('view-fit').click(); return; }
+  if (e.key === 'h' || e.key === 'H') { setMoveOn(!moveOn); return; }
+  if (e.key === 'Escape' && moveOn) { setMoveOn(false); return; }
   if (tab !== 'paint') return;
   const tools: Record<string, Tool> = { b: 'brush', g: 'bucket', l: 'corners', t: 'text', i: 'image', k: 'pick' };
   if (tools[e.key]) { setTool(tools[e.key]); return; }
@@ -1169,6 +1260,6 @@ updateButtons();
 setCount(4);
 if (desktop) $('subtitle').textContent = 'paint models for colour printing';
 (window as unknown as { modelPainter: unknown }).modelPainter = {
-  get loaded() { return loaded; }, get paint() { return paint; }, get palette() { return palette; }, stage, jobs,
+  get loaded() { return loaded; }, get paint() { return paint; }, get picker() { return picker; }, get palette() { return palette; }, stage, jobs,
   open: (src: FileSource) => openSource(src),
 };

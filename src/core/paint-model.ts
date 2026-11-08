@@ -17,7 +17,7 @@ import {
   bakePaint, CORNERS, collapse, decodePaint, encodePaint, forEachLeaf, leafCode, majority, setLeaf, splitLong, walkCode,
   codeShares, type Bary, type PaintNode,
 } from './paint-tree.ts';
-import { faceAdjacency, faceNormals, floodRegion } from './paint-fill.ts';
+import { faceAdjacency, faceNormals, spreads, type FillRule } from './paint-fill.ts';
 
 /** A screen picture of what to paint: per pixel a palette index, or −1 for nothing; row 0 at the top. */
 export interface LabelImage { labels: Int16Array; width: number; height: number }
@@ -389,75 +389,86 @@ export class PaintModel {
   }
 
   /**
-   * Bucket fill from the point `w` (corner weights) of triangle `face`: the
-   * connected region of the colour there, not across creases sharper than
-   * `maxAngleDeg`. Only the triangles the region may reach (those holding
-   * that colour, joined across gentle edges) are baked to find it. Returns
+   * Bucket fill from the point `w` (corner weights) of triangle `face`, by
+   * `rule` (a number is the crease angle of a `crease` fill): the connected
+   * region of the colour there, as far as the rule lets it spread, or for
+   * `part` every triangle joined to it. The region is followed piece by
+   * piece: a whole triangle of the colour passes it on along all its sides; a
+   * split triangle is opened only when the region reaches it, and passes it
+   * on along the stretches of its sides that its region pieces touch. Returns
    * how many triangles changed.
    */
-  bucket(face: number, w: ArrayLike<number>, material: number, maxAngleDeg: number): number {
-    const seedColour = this.colourAt(face, w);
-    if (seedColour === material) return 0;
-    const adj = this.faceAdjacency, normals = this.faceNormals;
-    const cosMax = Math.cos((Math.min(180, maxAngleDeg) * Math.PI) / 180);
-    const holds = (f: number) => (this.codes.has(f) ? this.codeHolds(f, seedColour) : this.faceMaterial[f] === seedColour);
-    // the triangles it may reach
-    const seen = new Uint8Array(this.count);
-    const reach: number[] = [];
-    const stack = [face];
-    seen[face] = 1;
-    let anyCode = false;
-    while (stack.length) {
-      const f = stack.pop()!;
-      reach.push(f);
-      if (this.codes.has(f)) anyCode = true;
-      for (let k = 0; k < 3; k++) {
-        const g = adj[f * 3 + k];
-        if (g < 0 || seen[g] || !holds(g)) continue;
-        const d = normals[f * 3] * normals[g * 3] + normals[f * 3 + 1] * normals[g * 3 + 1] + normals[f * 3 + 2] * normals[g * 3 + 2];
-        if (d < cosMax) continue;
-        seen[g] = 1;
-        stack.push(g);
+  bucket(face: number, w: ArrayLike<number>, material: number, rule: FillRule | number): number {
+    const r: FillRule = typeof rule === 'number' ? { mode: 'crease', angle: rule } : rule;
+    if (r.mode === 'part') return this.paintFaces(this.part(face), material);
+    const colour = this.colourAt(face, w);
+    if (colour === material) return 0;
+    const adj = this.faceAdjacency, T = this.mesh.triangles;
+    const step = spreads(r, this.faceNormals, face);
+    const whole: number[] = [];
+    const inWhole = new Uint8Array(this.count);
+    const opened = new Map<number, Pieces>();
+    const pieces = (f: number) => { let p = opened.get(f); if (!p) opened.set(f, (p = piecesOf(this.treeOf(f)!, this.faceMaterial[f]))); return p; };
+    // the stretches of sides the region reaches: triangle, its side, from, to (along the side, from its corner k)
+    const queue: number[] = [];
+    const cross = (f: number, k: number, t0: number, t1: number) => {
+      const g = adj[f * 3 + k];
+      if (g < 0 || !step(f, g)) return;
+      const back = adj[g * 3] === f ? 0 : adj[g * 3 + 1] === f ? 1 : adj[g * 3 + 2] === f ? 2 : -1;
+      if (back < 0) return;
+      // the shared side runs the other way round on most meshes
+      if (T[g * 3 + back] === T[f * 3 + k]) queue.push(g, back, t0, t1);
+      else queue.push(g, back, 1 - t1, 1 - t0);
+    };
+    const takeWhole = (f: number) => {
+      inWhole[f] = 1;
+      whole.push(f);
+      for (let k = 0; k < 3; k++) cross(f, k, 0, 1);
+    };
+    const flood = (f: number, p: Pieces, start: number) => {
+      const stack = [start];
+      p.in[start] = 1;
+      while (stack.length) {
+        const i = stack.pop()!;
+        const on = p.onSide[i];
+        if (on) for (let j = 0; j < on.length; j += 3) cross(f, on[j], on[j + 1], on[j + 2]);
+        for (let e = 0; e < 3; e++) {
+          const n = p.adj[i * 3 + e];
+          if (n >= 0 && !p.in[n] && p.material[n] === colour) { p.in[n] = 1; stack.push(n); }
+        }
+      }
+    };
+    // the start
+    if (!this.codes.has(face)) takeWhole(face);
+    else {
+      const p = pieces(face);
+      let leaf = -1, best = -Infinity, k = 0;
+      forEachLeaf(p.tree, (l) => {
+        const inside = insideLeaf([...l.v[0], ...l.v[1], ...l.v[2]], w);
+        if (inside > best) { best = inside; leaf = k; }
+        k++;
+      });
+      for (let i = 0; i < p.leaf.length; i++) if (p.leaf[i] === leaf && !p.in[i] && p.material[i] === colour) flood(face, p, i);
+    }
+    // onwards, a stretch of side at a time
+    for (let q = 0; q < queue.length; q += 4) {
+      const g = queue[q], k = queue[q + 1], a = queue[q + 2], b = queue[q + 3];
+      if (!this.codes.has(g)) { if (!inWhole[g] && this.faceMaterial[g] === colour) takeWhole(g); continue; }
+      const p = pieces(g), along = p.side[k];
+      for (let j = 0; j < along.length; j += 3) {
+        const i = along[j];
+        if (!p.in[i] && p.material[i] === colour && Math.min(along[j + 2], b) - Math.max(along[j + 1], a) > 1e-9) flood(g, p, i);
       }
     }
     let changed = 0;
-    if (!anyCode) {
-      // whole triangles only: the region is exactly what was reached
-      for (const f of reach) if (this.setFace(f, material)) changed++;
-      if (changed) this.changed();
-      return changed;
-    }
-    const trees = new Map<number, PaintNode>();
-    for (const f of reach) { const t = this.treeOf(f); if (t) trees.set(f, t); }
-    const b = bakePaint(this.mesh, this.faceMaterial, trees, reach);
-    // the baked triangle under the seed point
-    let seed = -1;
-    const seedTree = trees.get(face);
-    let seedLeaf = -1;
-    if (seedTree) {
-      let k = 0, best = -Infinity;
-      forEachLeaf(seedTree, (l) => {
-        const c = new Float64Array([...l.v[0], ...l.v[1], ...l.v[2]]);
-        const inside = insideLeaf(c, w);
-        if (inside > best) { best = inside; seedLeaf = k; }
-        k++;
-      });
-    }
-    for (let i = 0; i < b.source.length; i++) if (b.source[i] === face && (seedLeaf < 0 || b.leafIndex[i] === seedLeaf)) { seed = i; break; }
-    if (seed < 0) return 0;
-    const region = floodRegion(faceAdjacency(b.mesh), faceNormals(b.mesh), b.faceMaterial, seed, maxAngleDeg);
-    const whole = new Set<number>(), parts = new Map<number, Set<number>>();
-    for (const i of region) {
-      const f = b.source[i], k = b.leafIndex[i];
-      if (k < 0) whole.add(f);
-      else { let s = parts.get(f); if (!s) parts.set(f, (s = new Set())); s.add(k); }
-    }
     for (const f of whole) if (this.setFace(f, material)) changed++;
-    for (const [f, ks] of parts) {
-      const t = trees.get(f)!;
-      this.open.set(f, t);
+    for (const [f, p] of opened) {
+      const leaves = new Set<number>();
+      for (let i = 0; i < p.in.length; i++) if (p.in[i]) leaves.add(p.leaf[i]);
+      if (!leaves.size) continue;
+      this.open.set(f, p.tree);
       let k = 0, any = false;
-      forEachLeaf(t, (l) => { if (ks.has(k++) && l.material !== material) { l.material = material; any = true; } });
+      forEachLeaf(p.tree, (l) => { if (leaves.has(k++) && l.material !== material) { l.material = material; any = true; } });
       if (any) changed++;
       this.settle(f, any);
     }
@@ -465,14 +476,22 @@ export class PaintModel {
     return changed;
   }
 
-  /** Whether triangle `f`'s code has any leaf of `colour`. */
-  private codeHolds(f: number, colour: number): boolean {
-    const code = this.codes.get(f);
-    if (!code) return this.faceMaterial[f] === colour;
-    let yes = false;
-    const want = stateOf(colour);
-    walkCode(code, (_c, s) => { if (s === want) yes = true; });
-    return yes;
+  /** Every triangle joined to `face` across edges: the piece of the model it belongs to. */
+  part(face: number): Uint32Array {
+    const adj = this.faceAdjacency;
+    const seen = new Uint8Array(this.count);
+    const out: number[] = [];
+    const stack = [face];
+    seen[face] = 1;
+    while (stack.length) {
+      const f = stack.pop()!;
+      out.push(f);
+      for (let k = 0; k < 3; k++) {
+        const g = adj[f * 3 + k];
+        if (g >= 0 && !seen[g]) { seen[g] = 1; stack.push(g); }
+      }
+    }
+    return Uint32Array.from(out);
   }
 
   /** Keeps the whole paint as it is, before a change to all of it (a step of its own). */
@@ -598,6 +617,48 @@ export class PaintModel {
     return bakePaint(this.mesh, this.faceMaterial, (f) => this.treeOf(f));
   }
 }
+
+/** A split triangle as the fill sees it: its leaves made into triangles that meet edge to edge, in its own corner weights. */
+interface Pieces {
+  tree: PaintNode;
+  /** each piece's colour and the leaf (in `forEachLeaf` order) it is part of */
+  material: Uint8Array;
+  leaf: Int32Array;
+  /** the pieces across each piece's sides (−1 at the triangle's own sides) */
+  adj: Int32Array;
+  /** for a piece with sides on the triangle's sides: side, from, to for each */
+  onSide: (number[] | undefined)[];
+  /** for each side of the triangle, the pieces along it: piece, from, to */
+  side: [number[], number[], number[]];
+  /** the pieces in the region */
+  in: Uint8Array;
+}
+
+/** One triangle with corners at its own corner weights, so a baked point's position is its weights. */
+const UNIT: IndexedMesh = { positions: Float32Array.of(1, 0, 0, 0, 1, 0, 0, 0, 1), triangles: Uint32Array.of(0, 1, 2) };
+
+function piecesOf(tree: PaintNode, material: number): Pieces {
+  const b = bakePaint(UNIT, Uint8Array.of(material), () => tree, [0]);
+  const P = b.mesh.positions, L = b.mesh.triangles, n = L.length / 3;
+  const onSide: (number[] | undefined)[] = new Array(n);
+  const side: [number[], number[], number[]] = [[], [], []];
+  for (let i = 0; i < n; i++) {
+    for (let e = 0; e < 3; e++) {
+      const p = L[i * 3 + e] * 3, q = L[i * 3 + ((e + 1) % 3)] * 3;
+      // on side k (corner k to corner k + 1) when neither end has any of the corner across from it
+      for (let k = 0; k < 3; k++) {
+        const o = (k + 2) % 3, t = (k + 1) % 3;
+        if (P[p + o] !== 0 || P[q + o] !== 0) continue;
+        const t0 = Math.min(P[p + t], P[q + t]), t1 = Math.max(P[p + t], P[q + t]);
+        if (t1 <= t0) continue;
+        (onSide[i] ??= []).push(k, t0, t1);
+        side[k].push(i, t0, t1);
+      }
+    }
+  }
+  return { tree, material: b.faceMaterial, leaf: b.leafIndex, adj: faceAdjacency(b.mesh), onSide, side, in: new Uint8Array(n) };
+}
+
 
 /** How far inside a leaf (corners as 9 weights) the point `w` lies: its smallest weight in the leaf's corners (≥ 0 inside). */
 function insideLeaf(c: ArrayLike<number>, w: ArrayLike<number>): number {

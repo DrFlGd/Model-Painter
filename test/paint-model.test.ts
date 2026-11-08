@@ -141,6 +141,51 @@ test('the bucket stops at creases', async () => {
   assert.equal(model.bucket(0, [1 / 3, 1 / 3, 1 / 3], 1, 180), 12, 'without creases, all of it');
 });
 
+test('a same-colour fill crosses creases but not other colours', async () => {
+  const { Manifold } = await manifold();
+  const model = new PaintModel(fromManifold(Manifold.cube([10, 10, 10], true)));
+  // two sides painted colour 1 by crease fills, then repainted as one area: the fill crosses the edge between them only if they touch
+  model.bucket(0, [1 / 3, 1 / 3, 1 / 3], 1, 40);
+  const N = model.faceNormals;
+  const adj = model.faceAdjacency;
+  // a side that shares an edge with side 0: across one of its edges
+  let other = -1;
+  for (let k = 0; k < 3 && other < 0; k++) { const g = adj[k]; if (g >= 0 && N[g * 3] * N[0] + N[g * 3 + 1] * N[1] + N[g * 3 + 2] * N[2] < 0.5) other = g; }
+  assert.ok(other >= 0);
+  model.bucket(other, [1 / 3, 1 / 3, 1 / 3], 1, 40);
+  assert.equal(model.bucket(0, [1 / 3, 1 / 3, 1 / 3], 2, { mode: 'colour' }), 4, 'both painted sides, round the edge');
+  assert.equal([...model.faceMaterial].filter((m) => m === 0).length, 8, 'the rest is untouched');
+});
+
+test('a flat fill stops where the surface turns from where it started', () => {
+  // a strip bending 15 degrees at each of its folds: four quads, each turned 15 degrees more about the x axis
+  const pos: number[] = [], tri: number[] = [];
+  let y = 0, z = 0;
+  for (let i = 0; i <= 4; i++) {
+    pos.push(0, y, z, 10, y, z);
+    const a = (i * 15 * Math.PI) / 180;
+    y += 10 * Math.cos(a); z += 10 * Math.sin(a);
+  }
+  for (let i = 0; i < 4; i++) { const v = i * 2; tri.push(v, v + 1, v + 3, v, v + 3, v + 2); }
+  const strip = (): IndexedMesh => ({ positions: Float32Array.from(pos), triangles: Uint32Array.from(tri) });
+  const crease = new PaintModel(strip());
+  assert.equal(crease.bucket(0, [1 / 3, 1 / 3, 1 / 3], 1, { mode: 'crease', angle: 20 }), 8, 'every fold is gentle: a crease fill takes the whole strip');
+  const flat = new PaintModel(strip());
+  assert.equal(flat.bucket(0, [1 / 3, 1 / 3, 1 / 3], 1, { mode: 'flat', angle: 20 }), 4, 'within 20 degrees of the first quad: it and the next');
+});
+
+test('a part fill takes every joined triangle whatever its colour, and nothing apart', () => {
+  const two: IndexedMesh = {
+    positions: Float32Array.from([...square().positions, ...Array.from(square().positions, (v, i) => (i % 3 === 2 ? v + 5 : v))]),
+    triangles: Uint32Array.from([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]),
+  };
+  const model = new PaintModel(two);
+  model.brush({ x: 10, y: -10, z: 0 }, 3, 2);
+  assert.equal(model.bucket(0, [1 / 3, 1 / 3, 1 / 3], 1, { mode: 'part' }), 2);
+  assert.deepEqual([...model.faceMaterial], [1, 1, 0, 0]);
+  assert.equal(model.codes.size, 0, 'the brushed spot is part of it');
+});
+
 test('the colour at a point reads the leaf under it', () => {
   const model = new PaintModel(square());
   model.brush({ x: 10, y: -10, z: 0 }, 3, 5);

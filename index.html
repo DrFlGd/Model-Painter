@@ -90,7 +90,7 @@
               <button id="palette-add">Add colour</button>
               <button id="palette-remove" title="Paints what has this colour in another, then removes it">Remove…</button>
             </div>
-            <p class="small muted">The highlighted colour is the one you paint with. Colour 1 is the object's own filament; colour n prints with filament n.</p>
+            <p class="small muted">Click a colour to paint with it, or its arrow to change it. Colour 1 is the object's own filament; colour n prints with filament n.</p>
           </div>
           <div class="step">
             <h2>Tool</h2>
@@ -111,11 +111,17 @@
               <p class="small muted">Left-drag paints, right-drag turns the view, middle-drag moves it. [ and ] change the size.</p>
             </div>
             <div id="tool-bucket" class="tool hidden">
-              <div class="slider">
-                <div class="slider-head"><span>Stop at edges sharper than</span><span class="val"><input type="number" id="bucket-angle-num" step="5" min="5" max="180" /><span class="unit">°</span></span></div>
+              <span class="field-label">The fill spreads over</span>
+              <div class="fill-modes" id="fill-modes" role="radiogroup" aria-label="The fill spreads over">
+                <label class="fill-mode"><input type="radio" name="fill-mode" value="colour" checked /><span><b>Same colour</b><small>The connected area in the colour you click, whatever its shape. Repaints one painted area and nothing else.</small></span></label>
+                <label class="fill-mode"><input type="radio" name="fill-mode" value="crease" /><span><b>Up to creases</b><small>That colour, stopping at edges sharper than the angle below.</small></span></label>
+                <label class="fill-mode"><input type="radio" name="fill-mode" value="flat" /><span><b>Flat area</b><small>That colour, stopping where the surface turns more than the angle below from where you click. For a face with rounded edges.</small></span></label>
+                <label class="fill-mode"><input type="radio" name="fill-mode" value="part" /><span><b>Whole part</b><small>Every triangle joined to the one you click, whatever its colour: a strap, a gem, a separate piece.</small></span></label>
+              </div>
+              <div class="slider" id="bucket-angle-row">
+                <div class="slider-head"><span id="bucket-angle-label">Stop at edges sharper than</span><span class="val"><input type="number" id="bucket-angle-num" step="5" min="5" max="180" /><span class="unit">°</span></span></div>
                 <input type="range" id="bucket-angle" min="5" max="180" step="5" value="40" />
               </div>
-              <p class="small muted">Click the model: the fill spreads from there until it meets another colour or a crease. 180° stops only at colours.</p>
             </div>
             <div id="tool-corners" class="tool hidden">
               <p class="small muted">Click the corners of an area; double-click or Fill inside to colour everything you can see inside them. Esc or Clear starts over.</p>
@@ -185,6 +191,7 @@
             <button data-look="painted" title="The paint, as the slicer will print it">Paint</button>
           </div>
           <div class="tool-group">
+            <button id="view-move" class="icon" aria-pressed="false" title="Move the view: drag to slide it across (H). You can also hold Space and drag, or drag with the middle mouse button." aria-label="Move the view"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M8 1.5v13M1.5 8h13M8 1.5 6 3.5M8 1.5l2 2M8 14.5l-2-2M8 14.5l2-2M1.5 8l2-2M1.5 8l2 2M14.5 8l-2-2M14.5 8l-2 2"/></svg></button>
             <button id="view-fit" class="icon" title="Fit the model in view (F)" aria-label="Fit in view"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/></svg></button>
           </div>
         </div>
@@ -194,6 +201,7 @@
             <p class="muted">or its folder, so its textures come with it.<br />Then paint it from its textures, or by hand, and save a painted 3MF for Bambu Studio, OrcaSlicer or PrusaSlicer.</p>
           </div>
         </div>
+        <div id="view-hint" class="view-hint small muted" aria-hidden="true"></div>
         <div id="progress" class="progress hidden" role="status">
           <div class="progress-text"><span id="progress-text">Working…</span><button id="progress-stop" class="icon">Stop</button></div>
           <div class="progress-bar"><div id="progress-bar"></div></div>
