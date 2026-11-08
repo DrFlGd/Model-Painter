@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#1f2530"/>
+  <!-- a cube painted in three filaments, the top split where two colours meet -->
+  <path d="M512 230 L790 380 L512 530 L234 380 Z" fill="#f2efe8"/>
+  <path d="M512 230 L651 305 L373 455 L234 380 Z" fill="#e0592a"/>
+  <path d="M234 380 L512 530 L512 830 L234 680 Z" fill="#2f6fdf"/>
+  <path d="M790 380 L512 530 L512 830 L790 680 Z" fill="#f5be2a"/>
+  <path d="M512 530 L512 830" stroke="#1f2530" stroke-width="10"/>
+  <path d="M234 380 L512 530 L790 380" fill="none" stroke="#1f2530" stroke-width="10" stroke-linejoin="round"/>
+</svg>

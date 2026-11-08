@@ -7,7 +7,8 @@
 // uniform and the shading flat from screen derivatives, so a model painted
 // from its textures, with millions of leaves, still fits. A backing mesh of
 // the split triangles, whole and pushed back, fills the hairline cracks a GPU
-// leaves where leaves meet a neighbour's edge.
+// leaves where leaves meet a neighbour's edge, and is what picking sees of
+// them (pick.ts): every mesh triangle drawn whole exactly once.
 
 import * as THREE from 'three';
 import type { IndexedMesh } from '../core/mesh.ts';
@@ -133,13 +134,14 @@ export class PaintView extends PaintModel {
     if (colour) (u.brushColour.value as THREE.Color).setRGB(colour[0] / 255, colour[1] / 255, colour[2] / 255, THREE.SRGBColorSpace);
   }
 
-  /** Moves every vertex (after the model is turned or scaled): the paint stays on its triangles. */
-  refresh(): void {
+  /** After the mesh's vertices moved (the model turned or scaled): the paint stays on its triangles. */
+  override moved(): void {
     const box = new THREE.Box3().setFromBufferAttribute(new THREE.BufferAttribute(this.mesh.positions, 3));
     this.geometry.boundingBox = box;
     this.geometry.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
-    this.all = true;
-    this.sync();
+    this.backing.boundingBox = box;
+    this.backing.boundingSphere = this.geometry.boundingSphere;
+    super.moved();
   }
 
   protected override changed(): void { super.changed(); this.sync(); this.onChange?.(); }
@@ -253,14 +255,16 @@ export class PaintView extends PaintModel {
   private backingCapacity = 0;
   private syncBacking() {
     const n = this.codes.size;
-    if (n > this.backingCapacity || (this.backingCapacity > 4096 && n < this.backingCapacity / 4)) {
+    if (!this.backingCapacity || n > this.backingCapacity || (this.backingCapacity > 4096 && n < this.backingCapacity / 4)) {
       this.backing.dispose();
       this.backingCapacity = Math.max(256, Math.ceil(n * 1.5));
       this.backing.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.backingCapacity * 9), 3));
       this.backing.setAttribute('paint', new THREE.BufferAttribute(new Uint8Array(this.backingCapacity * 3), 1));
+      this.backing.setAttribute('face', new THREE.BufferAttribute(new Float32Array(this.backingCapacity * 3), 1));
     }
     const pos = (this.backing.getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
     const col = (this.backing.getAttribute('paint') as THREE.BufferAttribute).array as Uint8Array;
+    const ids = (this.backing.getAttribute('face') as THREE.BufferAttribute).array as Float32Array;
     const P = this.mesh.positions, T = this.mesh.triangles;
     let t = 0;
     for (const f of this.codes.keys()) {
@@ -269,10 +273,11 @@ export class PaintView extends PaintModel {
         pos[t * 9 + k * 3] = P[v]; pos[t * 9 + k * 3 + 1] = P[v + 1]; pos[t * 9 + k * 3 + 2] = P[v + 2];
       }
       col[t * 3] = col[t * 3 + 1] = col[t * 3 + 2] = this.faceMaterial[f];
+      ids[t * 3] = ids[t * 3 + 1] = ids[t * 3 + 2] = f;
       t++;
     }
     this.backing.setDrawRange(0, n * 3);
-    for (const name of ['position', 'paint']) {
+    for (const name of ['position', 'paint', 'face']) {
       const a = this.backing.getAttribute(name) as THREE.BufferAttribute;
       a.clearUpdateRanges();
       a.addUpdateRange(0, Math.max(1, n * (name === 'position' ? 9 : 3)));

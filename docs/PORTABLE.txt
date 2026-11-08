@@ -1,0 +1,14 @@
+Model Painter (portable)
+
+Nothing to install: keep this folder wherever you like and run
+"Model Painter.exe" from it. It keeps nothing beside itself; the models you
+paint are saved where you choose.
+
+Open a model with "Open a model…" or by dropping it (or its folder) on the
+window: its textures are found beside it, in its folder or the folders near
+it (a "textures" folder next to the model's, say).
+
+Windows: SmartScreen may say the app is unrecognised, because it is not
+signed. Click "More info", then "Run anyway". Windows 10 and 11 already
+have WebView2, which the app uses; on an older Windows install it from
+Microsoft (search "WebView2 runtime").

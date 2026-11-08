@@ -78,7 +78,19 @@ export class PaintModel {
     this.faceMaterial = new Uint8Array(n);
     this.centroids = new Float32Array(n * 3);
     this.radii = new Float32Array(n);
-    const P = mesh.positions, T = mesh.triangles;
+    this.measure();
+  }
+
+  /** After the mesh's vertices moved (the model turned or scaled): its triangles' places again. The paint stays on its triangles. */
+  moved(): void {
+    this.measure();
+    this.normals = null;
+    this.all = true;
+    this.changed();
+  }
+
+  private measure() {
+    const P = this.mesh.positions, T = this.mesh.triangles, n = this.count;
     for (let i = 0; i < n; i++) {
       const a = T[i * 3] * 3, b = T[i * 3 + 1] * 3, c = T[i * 3 + 2] * 3;
       const x = (P[a] + P[b] + P[c]) / 3, y = (P[a + 1] + P[b + 1] + P[c + 1]) / 3, z = (P[a + 2] + P[b + 2] + P[c + 2]) / 3;

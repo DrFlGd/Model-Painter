@@ -1,0 +1,105 @@
+name: Desktop app
+# Tests every pull request and push, and builds the Windows app: an installer
+# (ModelPainter_<version>_x64-setup.exe) and a portable zip that runs where it
+# is unzipped. A push to main whose version (src-tauri/tauri.conf.json) has no
+# release yet publishes one, tagged v<version>, with the notes in
+# docs/releases/<version>.md. Run it from the Actions tab for the files as
+# artifacts without a release.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Versions agree
+        run: |
+          a=$(node -p "require('./package.json').version")
+          b=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          c=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "package.json $a, tauri.conf.json $b, Cargo.toml $c"
+          [ "$a" = "$b" ] && [ "$b" = "$c" ]
+          [ -f "docs/releases/$b.md" ] || { echo "docs/releases/$b.md is missing"; exit 1; }
+
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ] && ! gh release view "v$version" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    needs: [test, check]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - name: Build
+        run: npx tauri build --bundles nsis
+      - name: Installer and portable zip
+        shell: pwsh
+        run: |
+          $v = "${{ needs.check.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path "out/Model Painter" | Out-Null
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          Copy-Item $setup.FullName "out/ModelPainter_${v}_x64-setup.exe"
+          Copy-Item "src-tauri/target/release/model-painter.exe" "out/Model Painter/Model Painter.exe"
+          Copy-Item "docs/PORTABLE.txt" "out/Model Painter/README.txt"
+          Compress-Archive -Path "out/Model Painter" -DestinationPath "out/ModelPainter_${v}_x64-portable.zip"
+          Get-ChildItem out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-painter-windows
+          path: |
+            out/*.exe
+            out/*.zip
+          if-no-files-found: error
+      - name: Publish the release
+        if: needs.check.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Model Painter ${{ needs.check.outputs.version }}
+          body_path: docs/releases/${{ needs.check.outputs.version }}.md
+          files: |
+            out/*.exe
+            out/*.zip
