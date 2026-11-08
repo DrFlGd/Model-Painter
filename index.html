@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Model Painter</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/src/web/style.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="top">
+      <div class="title"><h1>Model Painter</h1><span class="subtitle" id="subtitle">paint models for colour printing</span></div>
+      <nav class="tabs segmented" aria-label="Mode">
+        <button data-tab="model" class="active">Model</button>
+        <button data-tab="textures" id="textures-tab-button">Textures</button>
+        <button data-tab="paint" id="paint-tab-button">Paint</button>
+      </nav>
+      <div class="top-actions">
+        <button id="undo" class="icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M5.5 3 2.5 6l3 3M3 6h6.5a3.5 3.5 0 0 1 0 7H7"/></svg></button>
+        <button id="redo" class="icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M10.5 3l3 3-3 3M13 6H6.5a3.5 3.5 0 0 0 0 7H9"/></svg></button>
+        <span class="sep"></span>
+        <button id="theme" class="icon" title="Light or dark" aria-label="Light or dark"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor" /></svg></button>
+      </div>
+    </header>
+    <main class="main">
+      <aside id="panel" class="side left" aria-label="Settings">
+        <!-- ============ Model ============ -->
+        <section id="tab-model" class="tab">
+          <div class="step">
+            <h2><span class="n">1</span>Open a model</h2>
+            <label class="file" id="open-model">
+              <input type="file" id="model-file" multiple />
+              <span><b>Choose a model</b> or drop it, or its whole folder, on the view<br /><span class="muted small" id="model-kinds">glTF, GLB, OBJ, FBX, DAE, 3DS, PLY, PSK, STL, 3MF</span></span>
+            </label>
+            <div class="row">
+              <label class="btn file-btn" id="open-folder-label" title="A folder with the model and its textures"><input type="file" id="model-folder" webkitdirectory multiple />Open a folder…</label>
+              <button id="open-desktop" class="hidden">Open a model…</button>
+            </div>
+            <p id="model-info" class="small muted">Choose the model with its textures (select them together), or the folder they are in, so the textures are found.</p>
+            <ul id="model-notes" class="notes"></ul>
+          </div>
+          <div class="step">
+            <h2><span class="n">2</span>Print size</h2>
+            <div class="field"><span>Height</span><span class="val"><input type="number" id="size-height" min="1" max="2000" step="1" value="100" disabled /><span class="unit">mm</span></span></div>
+            <div class="field"><span>Width</span><span class="val"><input type="number" id="size-width" min="1" max="2000" step="1" value="100" disabled /><span class="unit">mm</span></span></div>
+            <p id="size-info" class="small muted"></p>
+            <span class="field-label">Turn the model</span>
+            <div class="row turn">
+              <button id="turn-x" disabled title="A quarter turn round the X axis">Round X</button>
+              <button id="turn-y" disabled title="A quarter turn round the Y axis">Round Y</button>
+              <button id="turn-z" disabled title="A quarter turn round the Z axis (up)">Round Z</button>
+            </div>
+            <div class="row"><button id="turn-reset" disabled>As it came</button></div>
+            <p class="small muted">It always stands on the plate. Paint stays where it is when the model is turned or resized.</p>
+          </div>
+        </section>
+
+        <!-- ============ Textures ============ -->
+        <section id="tab-textures" class="tab hidden">
+          <div class="step">
+            <h2><span class="n">1</span>Materials</h2>
+            <div id="materials" class="materials"><p class="small muted">Open a model first.</p></div>
+          </div>
+          <div class="step">
+            <h2><span class="n">2</span>Colours</h2>
+            <div class="slider">
+              <div class="slider-head"><span>Colours</span><span class="val"><input type="number" id="tex-count-num" step="1" min="1" max="16" /></span></div>
+              <input type="range" id="tex-count" min="1" max="16" step="1" value="4" />
+            </div>
+            <div id="plan-colours" class="plan-colours"></div>
+            <p id="plan-info" class="small muted">The colours are chosen from the textures, by how much of the model each covers.</p>
+            <div class="row"><button id="prepare-texture" disabled title="Colours, cleanup and detail, with the texture and the result side by side">Prepare texture…</button></div>
+          </div>
+          <div class="step">
+            <h2><span class="n">3</span>Paint the model</h2>
+            <div class="actions">
+              <button id="paint-textures" class="primary" disabled>Paint from textures</button>
+            </div>
+            <p id="paint-result" class="small muted">Each triangle is split where the texture's colours change across it, as the slicers paint, so the model needs no more triangles.</p>
+          </div>
+        </section>
+
+        <!-- ============ Paint ============ -->
+        <section id="tab-paint" class="tab hidden">
+          <div class="step">
+            <h2>Colours</h2>
+            <div id="palette" class="palette"></div>
+            <div class="row">
+              <button id="palette-add">Add colour</button>
+              <button id="palette-remove" title="Paints what has this colour in another, then removes it">Remove…</button>
+            </div>
+            <p class="small muted">The highlighted colour is the one you paint with. Colour 1 is the object's own filament; colour n prints with filament n.</p>
+          </div>
+          <div class="step">
+            <h2>Tool</h2>
+            <div class="toolbar" id="paint-tools">
+              <button data-tool="brush" class="active" title="Drag to paint (B)">Brush</button>
+              <button data-tool="bucket" title="Click a region to fill it (G)">Fill</button>
+              <button data-tool="corners" title="Click corners, fill inside (L)">Corners</button>
+              <button data-tool="text" title="Stamp text (T)">Text</button>
+              <button data-tool="image" title="Stamp a picture (I)">Image</button>
+              <button data-tool="pick" title="Click to take the colour under the pointer (K)">Pick</button>
+            </div>
+            <div id="tool-brush" class="tool">
+              <div class="slider">
+                <div class="slider-head"><span>Brush radius</span><span class="val"><input type="number" id="brush-num" step="0.1" min="0.1" max="50" /><span class="unit">mm</span></span></div>
+                <input type="range" id="brush" min="0.1" max="50" step="0.1" value="3" />
+              </div>
+              <label class="check"><input type="checkbox" id="brush-facing" checked /><span>Only the side facing me</span></label>
+              <p class="small muted">Left-drag paints, right-drag turns the view, middle-drag moves it. [ and ] change the size.</p>
+            </div>
+            <div id="tool-bucket" class="tool hidden">
+              <div class="slider">
+                <div class="slider-head"><span>Stop at edges sharper than</span><span class="val"><input type="number" id="bucket-angle-num" step="5" min="5" max="180" /><span class="unit">°</span></span></div>
+                <input type="range" id="bucket-angle" min="5" max="180" step="5" value="40" />
+              </div>
+              <p class="small muted">Click the model: the fill spreads from there until it meets another colour or a crease. 180° stops only at colours.</p>
+            </div>
+            <div id="tool-corners" class="tool hidden">
+              <p class="small muted">Click the corners of an area; double-click or Fill inside to colour everything you can see inside them. Esc or Clear starts over.</p>
+              <div class="row">
+                <button id="corners-apply" disabled>Fill inside</button>
+                <button id="corners-clear">Clear corners</button>
+              </div>
+              <p id="corners-info" class="small muted">No corners yet.</p>
+            </div>
+            <div id="tool-text" class="tool hidden">
+              <div class="field"><span>Text</span><input type="text" id="text-value" value="TEXT" /></div>
+              <div class="slider">
+                <div class="slider-head"><span>Letter height</span><span class="val"><input type="number" id="text-size-num" step="0.5" min="1" max="60" /><span class="unit">mm</span></span></div>
+                <input type="range" id="text-size" min="1" max="60" step="0.5" value="8" />
+              </div>
+              <div class="slider">
+                <div class="slider-head"><span>Angle</span><span class="val"><input type="number" id="text-angle-num" step="5" min="-180" max="180" /><span class="unit">°</span></span></div>
+                <input type="range" id="text-angle" min="-180" max="180" step="5" value="0" />
+              </div>
+              <div class="field"><span>Font</span>
+                <select id="text-font">
+                  <option value="bold 1px sans-serif">Sans, bold</option>
+                  <option value="1px sans-serif">Sans</option>
+                  <option value="bold 1px serif">Serif, bold</option>
+                  <option value="1px serif">Serif</option>
+                  <option value="bold 1px monospace">Mono, bold</option>
+                </select>
+              </div>
+              <p class="small muted">Move over the model to see where it goes, click to stamp it as seen from the camera.</p>
+            </div>
+            <div id="tool-image" class="tool hidden">
+              <div id="stamp-preview" class="image-preview checker"><div class="image-empty">No picture yet<br /><span class="muted small">PNG, JPG, WebP, DDS, TGA or SVG</span></div></div>
+              <div class="row">
+                <label class="btn primary file-btn"><input type="file" id="stamp-file" accept="image/*,.svg,.dds,.tga" />Choose picture…</label>
+                <button id="stamp-adjust" disabled title="Background, colours, cleanup and exposure">Prepare image…</button>
+              </div>
+              <div class="slider">
+                <div class="slider-head"><span>Width</span><span class="val"><input type="number" id="stamp-width-num" step="0.5" min="1" max="300" /><span class="unit">mm</span></span></div>
+                <input type="range" id="stamp-width" min="1" max="300" step="0.5" value="20" />
+              </div>
+              <div class="slider">
+                <div class="slider-head"><span>Angle</span><span class="val"><input type="number" id="stamp-angle-num" step="5" min="-180" max="180" /><span class="unit">°</span></span></div>
+                <input type="range" id="stamp-angle" min="-180" max="180" step="5" value="0" />
+              </div>
+              <label class="check"><input type="checkbox" id="stamp-one" /><span>All of it in the highlighted colour</span></label>
+              <p id="stamp-info" class="small muted">Choose a picture, move over the model to see where it goes, click to paint it on as seen from the camera. Its colours are added to the palette.</p>
+            </div>
+            <div id="tool-pick" class="tool hidden">
+              <p class="small muted">Click the model to paint with the colour under the pointer.</p>
+            </div>
+            <div class="row">
+              <button id="fill-all" title="Every triangle in the highlighted colour">Fill all</button>
+            </div>
+          </div>
+          <div class="step">
+            <h2>Paint</h2>
+            <p id="paint-info" class="small muted"></p>
+          </div>
+        </section>
+      </aside>
+
+      <div id="stage" class="stage">
+        <canvas id="overlay"></canvas>
+        <div class="stage-tools">
+          <div class="tool-group segmented look hidden" id="look" role="group" aria-label="Show">
+            <button data-look="original" class="active" title="The model in its own textures">Textures</button>
+            <button data-look="painted" title="The paint, as the slicer will print it">Paint</button>
+          </div>
+          <div class="tool-group">
+            <button id="view-fit" class="icon" title="Fit the model in view (F)" aria-label="Fit in view"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/></svg></button>
+          </div>
+        </div>
+        <div id="empty" class="empty">
+          <div>
+            <h2>Drop a model here</h2>
+            <p class="muted">or its folder, so its textures come with it.<br />Then paint it from its textures, or by hand, and save a painted 3MF for Bambu Studio, OrcaSlicer or PrusaSlicer.</p>
+          </div>
+        </div>
+        <div id="progress" class="progress hidden" role="status">
+          <div class="progress-text"><span id="progress-text">Working…</span><button id="progress-stop" class="icon">Stop</button></div>
+          <div class="progress-bar"><div id="progress-bar"></div></div>
+        </div>
+        <p id="status" class="status">Open a model to start.</p>
+      </div>
+
+      <aside class="side right" aria-label="Export">
+        <div class="group-static">
+          <h3 class="panel-title">Save</h3>
+          <div class="field stack"><span>Name</span><input type="text" id="export-name" value="model" /></div>
+          <div class="export">
+            <button class="export-btn primary" id="export-3mf" disabled>Painted 3MF<small>One object with its paint: Bambu Studio, OrcaSlicer, PrusaSlicer</small></button>
+            <button class="export-btn" id="export-split" disabled>3MF split by colour<small>A solid part per colour, for slicers without paint (needs a closed model)</small></button>
+            <button class="export-btn" id="export-stl" disabled>STL<small>The shape only, at print size</small></button>
+          </div>
+          <div class="field hidden" id="split-depth-row"><span>Colour depth</span><span class="val"><input type="number" id="split-depth" min="0.2" max="10" step="0.1" value="1.2" /><span class="unit">mm</span></span></div>
+          <label class="check"><input type="checkbox" id="export-thumb" checked /><span>Picture for the slicer's file list</span></label>
+          <p id="export-info" class="small muted"></p>
+        </div>
+        <div class="group-static">
+          <h3 class="panel-title">Filaments</h3>
+          <ol id="filaments" class="filaments"><li class="muted small">Nothing painted yet.</li></ol>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="/src/web/main.ts"></script>
+</body>
+</html>
