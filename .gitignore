@@ -1,0 +1,6 @@
+node_modules/
+dist/
+smoke-out/
+*.log
+/src-tauri/target/
+/src-tauri/gen/schemas
