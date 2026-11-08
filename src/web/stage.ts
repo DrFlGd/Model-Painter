@@ -29,6 +29,7 @@ export class Stage {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.18;
     this.controls.screenSpacePanning = true;
+    this.controls.zoomToCursor = true; // the wheel zooms towards what is under the mouse
     this.controls.addEventListener('change', () => this.render());
     const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.4);
     hemi.position.set(0, 0, 1);

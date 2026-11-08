@@ -1,6 +1,6 @@
 [package]
 name = "model-painter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Paint 3D models for multi-colour printing, from their textures or by hand"
 edition = "2021"
 rust-version = "1.77"

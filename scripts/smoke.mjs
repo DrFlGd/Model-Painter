@@ -239,22 +239,102 @@ for (const [label, files] of [['OBJ', ['cube.obj', 'cube.mtl', 'quarters.png']],
 // the hand tools on the cube
 await open(['cube.obj', 'cube.mtl', 'quarters.png']);
 await page.click('button[data-tab="paint"]');
-await page.click('#paint-tools button[data-tool="bucket"]');
 const box = await page.locator('#stage > canvas').first().boundingBox();
-await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-await page.waitForTimeout(200);
-check(/Filled [1-9]/.test(await page.textContent('#status')), `fill: ${await page.textContent('#status')}`);
+const mid = [box.x + box.width / 2, box.y + box.height / 2];
+const statusText = () => page.textContent('#status');
+const paintState = () => page.evaluate(() => { const p = window.modelPainter.paint; return { codes: p.codes.size, faces: Array.from(p.faceMaterial).join(''), paint: Array.from(p.codes.entries()).join('|') }; });
+const target = () => page.evaluate(() => window.modelPainter.stage.controls.target.toArray().map((v) => Math.round(v * 100) / 100).join(','));
+const fillMode = (m) => page.check(`#fill-modes input[value="${m}"]`);
+const undo = async () => { await page.keyboard.press('Control+z'); await page.waitForTimeout(150); };
+
+// the palette: a colour's box picks it, its arrow opens the colour picker
+await page.evaluate(() => {
+  window.__pickers = 0;
+  HTMLInputElement.prototype.showPicker = function () { window.__pickers++; };
+  document.addEventListener('click', (e) => { if (e.target instanceof HTMLInputElement && e.target.type === 'color') window.__pickers++; }, true);
+});
+await page.click('#palette .swatch:nth-child(3) .swatch-pick');
+const chosen = await page.textContent('#palette .swatch.active .swatch-n');
+check(chosen === '3' && (await page.evaluate(() => window.__pickers)) === 0, `clicking colour 3 paints with it and opens no picker (active ${chosen})`);
+await page.click('#palette .swatch:nth-child(2) .swatch-edit');
+check((await page.evaluate(() => window.__pickers)) === 1 && (await page.textContent('#palette .swatch.active .swatch-n')) === '3', 'the arrow beside colour 2 opens its picker and leaves colour 3 in use');
+await page.click('#palette .swatch:nth-child(2) .swatch-pick');
+
+// the fill's ways of spreading
+await page.click('#paint-tools button[data-tool="bucket"]');
+await fillMode('crease');
+check(await page.isVisible('#bucket-angle-row'), 'the crease fill shows its angle');
+await page.mouse.click(...mid);
+await page.waitForTimeout(150);
+check(/now: 2 triangles/.test(await statusText()), `up to creases fills one side: ${await statusText()}`);
+await undo();
+await fillMode('colour');
+check(!(await page.isVisible('#bucket-angle-row')), 'the same-colour fill has no angle');
+await page.mouse.click(...mid);
+await page.waitForTimeout(150);
+check(/now: 12 triangles/.test(await statusText()), `same colour crosses the creases: ${await statusText()}`);
+await undo();
+await fillMode('flat');
+await page.mouse.click(...mid);
+await page.waitForTimeout(150);
+check(/now: 2 triangles/.test(await statusText()), `flat area fills one side: ${await statusText()}`);
+// repaint that side only: a same-colour fill on it in colour 3 leaves the rest alone
+await page.click('#palette .swatch:nth-child(3) .swatch-pick');
+await fillMode('colour');
+await page.mouse.click(...mid);
+await page.waitForTimeout(150);
+const repainted = await paintState();
+check(/Colour 2 there is colour 3 now: 2 triangles/.test(await statusText()) && repainted.faces.split('').filter((c) => c === '2').length === 2, `same colour repaints just that area: ${await statusText()} (${repainted.faces})`);
+
+await page.screenshot({ path: join(out, 'fill.png') });
+
+// the brush, then a whole-part fill over its spot
 await page.click('#paint-tools button[data-tool="brush"]');
-await page.keyboard.press('3'); // another colour than the fill's
-await page.mouse.move(box.x + box.width / 2 - 30, box.y + box.height / 2);
+await page.keyboard.press('4');
+await page.mouse.move(mid[0] - 30, mid[1]);
 await page.mouse.down();
-for (let i = 0; i < 10; i++) await page.mouse.move(box.x + box.width / 2 - 30 + i * 6, box.y + box.height / 2 + i);
+for (let i = 0; i < 10; i++) await page.mouse.move(mid[0] - 30 + i * 6, mid[1] + i);
 await page.mouse.up();
 await page.waitForTimeout(400);
 check(/split into/.test(await page.textContent('#paint-info')), `brush splits triangles: ${await page.textContent('#paint-info')}`);
-await page.keyboard.press('Control+z');
+await page.click('#paint-tools button[data-tool="bucket"]');
+await fillMode('part');
+await page.keyboard.press('1');
+await page.mouse.click(...mid);
 await page.waitForTimeout(300);
-check(!/split into/.test(await page.textContent('#paint-info')), `undo: ${await page.textContent('#paint-info')}`);
+const part = await paintState();
+check(/The part \(12 triangles\) is colour 1 now/.test(await statusText()) && part.codes === 0 && part.faces === '000000000000', `whole part fills every triangle: ${await statusText()} (${part.faces}, ${part.codes} split)`);
+await undo();
+check((await paintState()).codes > 0, 'undo brings the brushed spot back');
+
+// moving the view: the middle button, the Move button, and Space, none of which paints
+await page.click('#paint-tools button[data-tool="brush"]');
+check(/Middle/.test(await page.textContent('#view-hint')), `the view says how to move it: ${await page.textContent('#view-hint')}`);
+const drag = async (button, dx = 60, dy = 30) => {
+  await page.mouse.move(...mid);
+  await page.mouse.down({ button });
+  for (let i = 1; i <= 6; i++) await page.mouse.move(mid[0] + (dx * i) / 6, mid[1] + (dy * i) / 6);
+  await page.mouse.up({ button });
+  await page.waitForTimeout(300);
+};
+let before = await paintState(), t0 = await target();
+await drag('middle');
+check((await target()) !== t0 && JSON.stringify(await paintState()) === JSON.stringify(before), 'a middle-button drag moves the view and paints nothing');
+await page.click('#view-move');
+t0 = await target();
+await drag('left', -50, 20);
+check((await target()) !== t0 && JSON.stringify(await paintState()) === JSON.stringify(before), 'with Move on, a left drag moves the view and paints nothing');
+await page.keyboard.press('Escape');
+check(!(await page.evaluate(() => document.querySelector('#stage > canvas').classList.contains('moving'))), 'Esc turns Move off');
+t0 = await target();
+await page.keyboard.down('Space');
+await drag('left', 40, -40);
+await page.keyboard.up('Space');
+check((await target()) !== t0 && JSON.stringify(await paintState()) === JSON.stringify(before), 'Space + drag moves the view and paints nothing');
+await page.keyboard.press('2');
+await drag('left', 30, 0);
+check(JSON.stringify(await paintState()) !== JSON.stringify(before), 'after Space is let go, a left drag paints again');
+await undo();
 await page.screenshot({ path: join(out, 'paint.png') });
 
 check(errors.length === 0, `no page errors${errors.length ? `: ${errors.join('; ')}` : ''}`);

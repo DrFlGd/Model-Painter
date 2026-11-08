@@ -1,7 +1,7 @@
 // Region fills on a painted mesh, independent of the viewer: face adjacency,
-// a bucket fill that spreads across edges until it meets another colour or a
-// crease, and face normals for the tools that need to know which way a face
-// looks.
+// the rules a fill spreads by (the colour clicked, creases, how far the
+// surface turns from where it started, or a whole connected part), and face
+// normals for the tools that need to know which way a face looks.
 
 import type { IndexedMesh } from './mesh.ts';
 
@@ -43,30 +43,27 @@ export function faceNormals(mesh: IndexedMesh): Float32Array {
 }
 
 /**
- * The faces a bucket fill from `seed` reaches: connected across edges, all in
- * the seed's current colour, never across an edge that bends more than
- * `maxAngleDeg` (180 ignores creases, so only colour bounds the fill).
+ * How a fill spreads from the triangle clicked:
+ * - `colour`: over the connected area of the colour clicked, whatever its shape;
+ * - `crease`: the same, but never across an edge that bends more than `angle`;
+ * - `flat`: the same, but only over triangles that face within `angle` of the one clicked;
+ * - `part`: over every triangle joined to it, whatever its colour.
  */
-export function floodRegion(adj: Int32Array, normals: Float32Array, faceMaterial: Uint8Array, seed: number, maxAngleDeg = 40): Uint32Array {
-  const colour = faceMaterial[seed];
-  const cosMax = Math.cos((Math.min(180, maxAngleDeg) * Math.PI) / 180);
-  const seen = new Uint8Array(faceMaterial.length);
-  const stack = [seed];
-  const out: number[] = [];
-  seen[seed] = 1;
-  while (stack.length) {
-    const f = stack.pop()!;
-    out.push(f);
-    for (let k = 0; k < 3; k++) {
-      const g = adj[f * 3 + k];
-      if (g < 0 || seen[g] || faceMaterial[g] !== colour) continue;
-      const d = normals[f * 3] * normals[g * 3] + normals[f * 3 + 1] * normals[g * 3 + 1] + normals[f * 3 + 2] * normals[g * 3 + 2];
-      if (d < cosMax) continue; // a crease
-      seen[g] = 1;
-      stack.push(g);
-    }
-  }
-  return Uint32Array.from(out);
+export type FillMode = 'colour' | 'crease' | 'flat' | 'part';
+export interface FillRule { mode: FillMode; /** degrees, for `crease` and `flat` (default 40) */ angle?: number }
+
+/**
+ * Whether a fill by `rule` that started at `seed` may step from face `f` to
+ * its neighbour `g`, as far as their directions go (the colour is checked
+ * apart). A triangle with no area (no direction) never stops it.
+ */
+export function spreads(rule: FillRule, normals: Float32Array, seed: number): (f: number, g: number) => boolean {
+  if (rule.mode !== 'crease' && rule.mode !== 'flat') return () => true;
+  const cos = Math.cos((Math.min(180, rule.angle ?? 40) * Math.PI) / 180);
+  const flat = (i: number) => normals[i * 3] === 0 && normals[i * 3 + 1] === 0 && normals[i * 3 + 2] === 0;
+  const dot = (i: number, j: number) => normals[i * 3] * normals[j * 3] + normals[i * 3 + 1] * normals[j * 3 + 1] + normals[i * 3 + 2] * normals[j * 3 + 2];
+  if (rule.mode === 'crease') return (f, g) => flat(f) || flat(g) || dot(f, g) >= cos;
+  return (_f, g) => flat(seed) || flat(g) || dot(seed, g) >= cos;
 }
 
 /**
