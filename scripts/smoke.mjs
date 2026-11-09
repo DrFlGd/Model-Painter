@@ -1,9 +1,10 @@
 // Opens the built app in Chromium and walks it through every way in: a
 // textured OBJ, glTF, Collada, FBX and PLY made here, each painted from its
 // texture (or vertex colours) and saved as a painted 3MF, which is read back.
-// Then a model of overlapping parts made watertight on the Finish tab, and
-// the hand tools on a cube. Run with `npm run smoke` (it builds
-// first); it needs Playwright's Chromium.
+// Then a model of overlapping parts made watertight on the Finish tab, cut
+// into pieces with joints on the Cut tab and each piece saved, and the hand
+// tools on a cube. Run with `npm run smoke` (it builds first); it needs
+// Playwright's Chromium.
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -300,6 +301,84 @@ for (const [label, files] of [['OBJ', ['cube.obj', 'cube.mtl', 'quarters.png']],
   await page.click('#finish-base button[data-base="none"]');
   check(await page.isVisible('#finish-stale'), `other settings say it was made with others: ${await page.textContent('#finish-stale')}`);
   await page.click('#finish-base button[data-base="round"]');
+}
+
+// the Cut tab: the painted watertight model cut across Z with pegs, its paint carried onto the pieces, each piece saved laid
+// flat; then dowels, which come out as pieces too, and a cut moved through a point picked on the model
+{
+  const knobAt = () => page.evaluate(() => {
+    const st = window.modelPainter.stage;
+    let k = null;
+    st.extras.traverse((o) => { if (o.userData?.part === 'knob') k = o; });
+    const v = k.getWorldPosition(k.position.clone()).project(st.camera);
+    const r = st.renderer.domElement.getBoundingClientRect();
+    return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
+  });
+  await page.click('button[data-tab="cut"]');
+  check(/watertight model/.test(await page.textContent('#cut-what')), `the Cut tab cuts the watertight model shown: ${await page.textContent('#cut-what')}`);
+  await page.click('#cut-add button[data-axis="z"]');
+  check((await page.locator('#cut-list li').count()) === 1 && /across Z · 0\.0 mm from the middle · Pegs, 0\.20 mm clearance/.test(await page.textContent('#cut-list')), `a cut across Z through the middle, with pegs: ${await page.textContent('#cut-list')}`);
+  // its round handle tilts it, and Z puts it level again
+  const [kx, ky] = await knobAt();
+  await page.mouse.move(kx, ky);
+  await page.mouse.down();
+  await page.mouse.move(kx + 80, ky + 10, { steps: 5 });
+  await page.mouse.up();
+  const tilt = Number(await page.inputValue('#cut-tilt-num'));
+  check(tilt > 10 && /tilted/.test(await page.textContent('#cut-list')), `dragging the handle tilts the plane: ${tilt}°`);
+  await page.click('#cut-dir button[data-dir="z"]');
+  await page.fill('#cut-position-num', '2');
+  await page.dispatchEvent('#cut-position-num', 'change');
+  check(/across Z · 2\.0 mm from the middle/.test(await page.textContent('#cut-list')), `the position box moves it: ${await page.textContent('#cut-list')}`);
+  await page.click('#cut-run');
+  await page.waitForFunction(() => /Cut into|couldn't|stopped/.test(document.getElementById('status').textContent), null, { timeout: 120000 });
+  const done = await page.textContent('#status');
+  check(/^Cut into 2 pieces/.test(done), `cut: ${done}`);
+  const pieces = await page.evaluate(() => window.modelPainter.cut.pieces.map((p) => {
+    const c = p.model.paint.colour;
+    let painted = 0;
+    for (const v of c) if (v > 0) painted++;
+    return { kind: p.kind, n: c.length, painted, codes: p.model.paint.codes.size, volume: p.volume, uvs: !!p.model.uvs };
+  }));
+  check(pieces.length === 2 && pieces.every((p) => p.painted > 0 && p.uvs && p.volume > 1000), `each piece keeps its paint and UVs: ${JSON.stringify(pieces)}`);
+  check((await page.locator('#piece-list li[data-piece]').count()) === 2, `the pieces are listed: ${await page.textContent('#piece-list')}`);
+  await page.click('#cut-show button[data-show="painted"]');
+  await page.fill('#cut-spread', '0.4');
+  await page.dispatchEvent('#cut-spread', 'input');
+  await page.screenshot({ path: join(out, 'cut.png') });
+  // each piece in its own painted 3MF, laid flat
+  await page.click('#export-what button[data-what="pieces"]');
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('#export-3mf')]);
+  const file = join(out, 'pieces.zip');
+  await download.saveAs(file);
+  const saved = [...unzip(readFileSync(file))].map(([name, bytes]) => {
+    const xml = unzip(bytes).get('3D/3dmodel.model').toString();
+    const z = [...xml.matchAll(/<vertex x="[^"]*" y="[^"]*" z="([^"]*)"/g)].map((m) => Number(m[1]));
+    return { name, triangles: (xml.match(/<triangle /g) ?? []).length, painted: (xml.match(/paint_color="/g) ?? []).length, bottom: Math.min(...z) };
+  });
+  check(saved.length === 2 && saved.every((f) => /^parts_pieces\/parts_piece[12]\.3mf$/.test(f.name) && f.painted > 0 && Math.abs(f.bottom) < 1e-3),
+    `each piece saved in its own painted 3MF, on the plate: ${JSON.stringify(saved)}`);
+  check(/2 files in parts_pieces\.zip, each laid flat/.test(await page.textContent('#export-info')), `the save says where: ${await page.textContent('#export-info')}`);
+  const [stls] = await Promise.all([page.waitForEvent('download'), page.click('#export-stl')]);
+  await stls.saveAs(join(out, 'pieces-stl.zip'));
+  const stlNames = [...unzip(readFileSync(join(out, 'pieces-stl.zip'))).keys()];
+  check(stlNames.length === 2 && stlNames.every((n) => n.endsWith('.stl')), `and as STLs: ${stlNames.join(', ')}`);
+  // dowels: the joint changed shows the pieces out of date until cut again
+  await page.click('#cut-show button[data-show="model"]');
+  await page.click('#cut-joint button[data-joint="dowels"]');
+  check(await page.isVisible('#cut-stale'), `another joint says the pieces are out of date: ${await page.textContent('#cut-stale')}`);
+  await page.evaluate(() => { document.getElementById('status').textContent = ''; });
+  await page.click('#cut-run');
+  await page.waitForFunction(() => /Cut into|couldn't|stopped/.test(document.getElementById('status').textContent), null, { timeout: 120000 });
+  const dowels = await page.evaluate(() => window.modelPainter.cut.pieces.filter((p) => p.kind === 'dowel').length);
+  check(dowels > 0 && /dowel/.test(await page.textContent('#piece-list')), `dowels come out as pieces: ${await page.textContent('#status')}`);
+  // Pick a point moves the plane through where the model is clicked
+  await page.click('#cut-show button[data-show="model"]');
+  await page.click('#cut-pick');
+  const view = await page.locator('#stage > canvas').first().boundingBox();
+  await page.mouse.click(view.x + view.width / 2, view.y + view.height * 0.4);
+  check(/goes through the point picked/.test(await page.textContent('#status')), `Pick a point: ${await page.textContent('#status')}`);
+  await page.click('#export-what button[data-what="model"]');
 }
 
 // the hand tools on the cube

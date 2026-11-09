@@ -6,6 +6,7 @@ import type { PaintInput, PaintResult, Picture, Progress, Suggestion, TextureSet
 import { DEFAULT_SETTINGS } from '../core/texpaint.ts';
 import { FINISH_DEFAULTS, type FinishSettings } from '../core/finish.ts';
 import type { FinishedModel } from '../core/finish-map.ts';
+import type { CutFace, CutSettings, JointReport } from '../core/cut.ts';
 
 /** The model made watertight: the model to show, and what finishing did. */
 export interface FinishOutput {
@@ -21,6 +22,25 @@ export interface FinishOutput {
 
 export interface FinishPaint { colour: Uint8Array; codes: Map<number, string> }
 
+/** One piece the model was cut into, with the paint, UVs and materials it took from the model. */
+export interface CutPieceOut {
+  name: string;
+  kind: 'piece' | 'dowel';
+  model: FinishedModel;
+  faces: CutFace[];
+  axis?: [number, number, number];
+  /** mm³ */
+  volume: number;
+}
+
+export interface CutOutput {
+  pieces: CutPieceOut[];
+  notes: string[];
+  joints: JointReport[];
+  /** of the solid cut, mm³ */
+  volume: number;
+}
+
 export type Request = { id: number } & (
   | { op: 'decode'; name: string; bytes: Uint8Array }
   | { op: 'setup'; input: PaintInput }
@@ -28,6 +48,7 @@ export type Request = { id: number } & (
   | { op: 'reduce'; material: number; palette: string[]; settings: TextureSettings }
   | { op: 'paint'; settings: TextureSettings; suggestion: Suggestion | null }
   | { op: 'finish'; groups: Uint32Array; paint: FinishPaint | null; settings: FinishSettings; baseMaterial: number }
+  | { op: 'cut'; key: string; groups: Uint32Array; solid: boolean; sheet: number; settings: CutSettings; paint: FinishPaint | null; baseMaterial: number }
 );
 
 type Waiting = { resolve: (v: never) => void; reject: (e: Error) => void; progress?: Progress };
@@ -109,6 +130,18 @@ export class TextureJobs {
   async finish(groups: Uint32Array, paint: FinishPaint | null, settings: Partial<FinishSettings>, baseMaterial: number, progress?: Progress): Promise<FinishOutput> {
     await this.ready();
     return this.ask({ op: 'finish', groups, paint, settings: { ...FINISH_DEFAULTS, ...settings }, baseMaterial }, progress);
+  }
+
+  /**
+   * The model cut into pieces (cut.ts), each piece's paint, UVs and materials
+   * carried over (finish-map.ts), the cut faces and joints in `baseMaterial`
+   * and colour 1. The model made solid is kept in the worker under `key`, so
+   * cutting the same model again only cuts. `solid`: the model is watertight
+   * already (else it is made solid first, open surfaces `sheet` mm thick).
+   */
+  async cut(key: string, groups: Uint32Array, solid: boolean, sheet: number, settings: CutSettings, paint: FinishPaint | null, baseMaterial: number, progress?: Progress): Promise<CutOutput> {
+    await this.ready();
+    return this.ask({ op: 'cut', key, groups, solid, sheet, settings, paint, baseMaterial }, progress);
   }
 
   /** Stops whatever the worker is doing. */

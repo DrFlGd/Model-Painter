@@ -1,9 +1,10 @@
 // Model Painter's page: open a model in any of the formats it reads, with
 // its textures; size and turn it for printing; make it watertight (with a
-// flat bottom or a base) keeping its paint; paint it from its textures
-// (Prepare texture) or by hand (brush, fill, corners, text, picture stamps
-// made with Prepare image); save a painted 3MF, a 3MF split by colour, or
-// an STL. The same page runs in a browser and in the desktop app.
+// flat bottom or a base) keeping its paint; cut it into pieces with joints
+// (cut-tab.ts); paint it from its textures (Prepare texture) or by hand
+// (brush, fill, corners, text, picture stamps made with Prepare image); save
+// a painted 3MF, a 3MF split by colour, or an STL, of the whole model or of
+// each piece. The same page runs in a browser and in the desktop app.
 
 import * as THREE from 'three';
 import { Stage } from './stage.ts';
@@ -11,6 +12,7 @@ import { PaintView } from './paint-view.ts';
 import { Picker } from './pick.ts';
 import { TexturedView, type MaterialLook } from './textured.ts';
 import { TextureJobs, Cancelled, type FinishOutput } from './texture-jobs.ts';
+import { CutTab, type CutSource, type PieceFormat } from './cut-tab.ts';
 import { prepareTexture, planPalette, type TexturePlan } from './prepare-texture.ts';
 import { prepareImage, tracedPreview, dialog, h, hex, type ImageSettings } from './prepare-image.ts';
 import { registerThreeImporters } from './import-three.ts';
@@ -76,6 +78,10 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 // ---------- the open model ----------
 type Use = 'texture' | 'colour' | 'vertex' | 'none';
 interface Loaded {
+  /** this model, among those opened or made (the original and its watertight model are two) */
+  id: number;
+  /** changes to its size or turn: the solid cut from it is made again after one */
+  version: number;
   model: ImportedModel;
   /** the vertices as they came */
   original: Float32Array;
@@ -103,6 +109,9 @@ let look: 'original' | 'painted' = 'original';
 let tab = 'model';
 let plan: TexturePlan | null = null;
 let lastPaint: PaintResult | null = null;
+let models = 0;
+/** changes to any model's paint, so pieces cut before one show as out of date */
+let paintEdits = 0;
 
 $('model-kinds').textContent = [...new Set(modelExtensions().map((e) => e.slice(1).toUpperCase()))].join(', ');
 $<HTMLInputElement>('model-file').accept = modelExtensions().concat(PICTURE_EXTENSIONS, ['.mtl', '.bin']).join(',');
@@ -160,7 +169,7 @@ async function openSource(src: FileSource) {
   plan = null; lastPaint = null;
   const pictures: (Picture | null)[] = model.materials.map(() => null);
   const use: Use[] = model.materials.map(() => 'none');
-  const l: Loaded = { model, original: model.mesh.positions.slice(), turn: IDENTITY.slice(), scale: 1, pictures, use, textured: null as unknown as TexturedView };
+  const l: Loaded = { id: ++models, version: 0, model, original: model.mesh.positions.slice(), turn: IDENTITY.slice(), scale: 1, pictures, use, textured: null as unknown as TexturedView };
   // the textures
   const withTexture = model.materials.map((m, i) => [m, i] as const).filter(([m]) => m.texture?.bytes);
   let done = 0;
@@ -216,6 +225,7 @@ async function openSource(src: FileSource) {
   renderPalette();
   updatePaintInfo();
   renderFinish();
+  cut.reset();
   updateButtons();
   setMouse();
   status(model.paint ? `${model.name} is open with its paint.` : anyPaintSource()
@@ -248,6 +258,7 @@ function defaultScale(model: ImportedModel): { scale: number; note?: string } {
 function applyTransform(changed = true) {
   if (!loaded) return;
   if (changed && shown === 'original') changes++;
+  if (changed) loaded.version++;
   const { model, original: O, turn: R, scale: k } = loaded;
   const P = model.mesh.positions;
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -312,7 +323,7 @@ $('turn-y').onclick = () => turn('y');
 $('turn-z').onclick = () => turn('z');
 $('turn-reset').onclick = () => { if (loaded) { loaded.turn = IDENTITY.slice(); applyTransform(); stage.frame(new THREE.Box3().setFromObject(stage.content), true); } };
 
-$('view-fit').onclick = () => stage.frame(new THREE.Box3().setFromObject(stage.content), true);
+$('view-fit').onclick = () => stage.frame(cut.frameBox() ?? new THREE.Box3().setFromObject(stage.content), true);
 
 // ---------- opening files ----------
 async function chooseModel(models: GivenFile[]): Promise<GivenFile | null> {
@@ -601,6 +612,7 @@ function swap(which: 'original' | 'finished') {
   renderPalette();
   updatePaintInfo();
   renderFinish();
+  cut.render();
   updateButtons();
   setMouse();
 }
@@ -720,7 +732,7 @@ async function runFinish() {
       name: l.model.name, format: `${l.model.format}, made watertight`, mesh: m.mesh, uvs: m.uvs, vertexColours: m.vertexColours,
       faceMaterial: m.faceMaterial, faceGroup: m.faceGroup, materials, units: 'mm', notes: [],
     };
-    const fl: Loaded = { model, original: model.mesh.positions.slice(), turn: IDENTITY.slice(), scale: 1, pictures, use, textured: null as unknown as TexturedView };
+    const fl: Loaded = { id: ++models, version: 0, model, original: model.mesh.positions.slice(), turn: IDENTITY.slice(), scale: 1, pictures, use, textured: null as unknown as TexturedView };
     fl.textured = new TexturedView(model, looks(fl));
     let fp: PaintView | null = null, fpick: Picker | null = null;
     if (m.paint) {
@@ -745,6 +757,19 @@ async function runFinish() {
 $('finish-run').onclick = () => void runFinish();
 loadFinishSettings();
 
+// ---------- cutting it into pieces ----------
+/** The model shown, as the Cut tab cuts it. */
+function cutSource(): CutSource | null {
+  if (!loaded) return null;
+  return {
+    key: `${loaded.id}:${loaded.version}`, edits: paintEdits, watertight: shown === 'finished',
+    model: loaded.model, target: loaded.textured.object,
+    paint: paint ? { faceMaterial: paint.faceMaterial, codes: paint.codes } : null,
+    palette, looks: looks(loaded), sheet: finishSettings().sheet,
+  };
+}
+const cut = new CutTab({ stage, jobs, source: cutSource, status, progress, changed: () => updateButtons() });
+
 // ---------- the paint ----------
 function ensurePaint() {
   if (paint || !loaded) return;
@@ -759,6 +784,7 @@ function ensurePaint() {
 let infoTimer = 0;
 function onPaintChange() {
   if (shown === 'original' && !switching) changes++;
+  if (!switching) paintEdits++;
   stage.render();
   updateHistory();
   clearTimeout(infoTimer);
@@ -808,7 +834,12 @@ function updateButtons() {
   $<HTMLButtonElement>('paint-textures').disabled = !has || !anyPaintSource() || jobs.busy;
   for (const id of ['export-3mf', 'export-stl']) $<HTMLButtonElement>(id).disabled = !has;
   $<HTMLButtonElement>('finish-run').disabled = !has || jobs.busy;
-  $<HTMLButtonElement>('export-split').disabled = !paint;
+  const pieces = !!cut.pieces;
+  if (!pieces && exportWhat === 'pieces') setExportWhat('model');
+  const what = $<HTMLButtonElement>('export-what-pieces');
+  what.disabled = !pieces;
+  what.title = pieces ? 'Every piece of the cut model in its own file, in a new folder' : 'Cut it first (Cut tab)';
+  $<HTMLButtonElement>('export-split').disabled = exportWhat === 'pieces' ? !cut.painted : !paint;
   updateHistory();
 }
 
@@ -902,6 +933,7 @@ function setMouse() {
   move.setAttribute('aria-pressed', String(moveOn));
   $('view-hint').textContent = !loaded ? ''
     : slide ? 'Drag: move the view · Scroll: zoom'
+    : tab === 'cut' ? 'Drag a plane: slide it · Drag its handle: tilt it · Left elsewhere: turn · Right: move · Scroll: zoom'
     : tab === 'paint' ? 'Left: paint · Right: turn · Middle, Shift + right or Space + drag: move · Scroll: zoom'
     : 'Left: turn · Right or middle: move · Scroll: zoom';
   if (slide) { paint?.showBrush(null, 0); stage.render(); } else updateHover();
@@ -934,8 +966,9 @@ window.addEventListener('blur', () => { if (spaceHeld) { spaceHeld = false; setM
 function setTab(name: string) {
   tab = name;
   for (const x of document.querySelectorAll<HTMLButtonElement>('.tabs button')) x.classList.toggle('active', x.dataset.tab === name);
-  for (const t of ['model', 'finish', 'textures', 'paint']) $(`tab-${t}`).classList.toggle('hidden', t !== name);
+  for (const t of ['model', 'finish', 'cut', 'textures', 'paint']) $(`tab-${t}`).classList.toggle('hidden', t !== name);
   if (name === 'finish') renderFinish();
+  cut.setActive(name === 'cut');
   if (name === 'paint' && loaded) { ensurePaint(); setLook('painted'); renderPalette(); updatePaintInfo(); }
   if (name !== 'paint') { paint?.showBrush(null, 0); clearCorners(); }
   view.classList.toggle('painting', name === 'paint');
@@ -1416,8 +1449,32 @@ async function thumbnail(): Promise<Uint8Array | null> {
   try { return await stage.thumbnail(512); } finally { setLook(was); }
 }
 
+// ---------- the whole model, or each piece of it cut ----------
+let exportWhat: 'model' | 'pieces' = 'model';
+function setExportWhat(w: 'model' | 'pieces') {
+  exportWhat = w;
+  for (const b of $('export-what').querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('active', b.dataset.what === w);
+  $('export-flat-row').classList.toggle('hidden', w !== 'pieces');
+  $<HTMLButtonElement>('export-split').disabled = w === 'pieces' ? !cut.painted : !paint;
+}
+for (const b of $('export-what').querySelectorAll<HTMLButtonElement>('button')) b.onclick = () => setExportWhat(b.dataset.what as 'model' | 'pieces');
+
+/** Saves each piece when Each piece is chosen; false when the whole model is to be saved. */
+async function savePieces(format: PieceFormat): Promise<boolean> {
+  if (exportWhat !== 'pieces' || !cut.pieces) return false;
+  try {
+    const done = await cut.save(format, exportName(), { thumbnail: $<HTMLInputElement>('export-thumb').checked, depth: num('split-depth') || 1.2 });
+    if (done) $('export-info').textContent = done;
+  } catch (e) {
+    const msg = errorText(e);
+    status(format === 'split' && /manifold|closed|NotManifold|wound/i.test(msg) ? `Split by colour failed on a piece: ${msg}` : `The pieces couldn't be saved: ${msg}`);
+  }
+  updateButtons();
+  return true;
+}
+
 $('export-3mf').onclick = async () => {
-  if (!loaded) return;
+  if (!loaded || await savePieces('3mf')) return;
   const name = exportName();
   progress('Writing the painted 3MF…', 0.3);
   await frame();
@@ -1435,14 +1492,14 @@ $('export-3mf').onclick = async () => {
 };
 
 $('export-stl').onclick = async () => {
-  if (!loaded) return;
+  if (!loaded || await savePieces('stl')) return;
   const name = exportName();
   await save(`${name}.stl`, [stl(loaded.model.mesh, name)]);
 };
 
 $('export-split').addEventListener('mouseenter', () => $('split-depth-row').classList.remove('hidden'));
 $('export-split').onclick = async () => {
-  if (!paint) return;
+  if (await savePieces('split') || !paint) return;
   const name = exportName();
   progress('Splitting the model by colour…', 0.2);
   await frame();
@@ -1470,6 +1527,6 @@ updateButtons();
 setCount(4);
 if (desktop) $('subtitle').textContent = 'paint models for colour printing';
 (window as unknown as { modelPainter: unknown }).modelPainter = {
-  get loaded() { return loaded; }, get paint() { return paint; }, get picker() { return picker; }, get palette() { return palette; }, stage, jobs,
+  get loaded() { return loaded; }, get paint() { return paint; }, get picker() { return picker; }, get palette() { return palette; }, stage, jobs, cut,
   open: (src: FileSource) => openSource(src),
 };
