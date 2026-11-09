@@ -1,5 +1,6 @@
 // The desktop app's own commands (src-tauri/src/lib.rs): the open and save
-// dialogs, reading files beside a model, and the file it was opened with.
+// dialogs, reading files beside a model, the file it was opened with, and a
+// new folder to save a cut model's pieces in.
 // In a browser none of this exists and the page uses its file inputs and
 // downloads instead.
 
@@ -35,6 +36,21 @@ export function pickFile(title: string, filters: { name: string; extensions: str
 /** Saves bytes where the person picks in a save dialog, starting from `name`. The path, or null when cancelled. */
 export function saveFile(name: string, data: Uint8Array): Promise<string | null> {
   return invoke('export_file', data, { 'x-name': encodeURIComponent(name) });
+}
+
+/** The system's folder dialog; null when cancelled. */
+export function pickFolder(title: string): Promise<string | null> {
+  return invoke('pick_folder', { title });
+}
+
+/** Makes a new folder `name` in `parent` ("name 2"… when that is taken); its path. */
+export function makeFolder(parent: string, name: string): Promise<string> {
+  return invoke('make_folder', { parent, name });
+}
+
+/** Writes a file into a folder made with makeFolder. */
+export function writeFile(folder: string, name: string, data: Uint8Array): Promise<void> {
+  return invoke('write_file', data, { 'x-folder': encodeURIComponent(folder), 'x-name': encodeURIComponent(name) });
 }
 
 /** The model the app was opened with (a file dropped on its icon, or Open with), if any. */

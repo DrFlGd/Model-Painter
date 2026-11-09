@@ -1,21 +1,34 @@
 // The long work, off the page's thread: reading pictures, suggesting the
 // colours, reducing a texture for the Prepare texture dialog, painting the
 // model from its textures (core/texpaint.ts), and making it watertight
-// (core/finish.ts, with its paint carried over by core/finish-map.ts). It
-// keeps the model it was last given, so the dialog's many small requests
-// send only their settings.
+// (core/finish.ts, with its paint carried over by core/finish-map.ts), and
+// cutting it into pieces (core/cut.ts). It keeps the model it was last given,
+// so the dialog's many small requests send only their settings, and the
+// model made solid for cutting, so moving a cut only cuts again.
 
 import { decodePicture, setBrowserDecoder } from '../core/images/index.ts';
 import { MAX_TEXTURE, paintModel, reduce, shrink, suggestPalette, type PaintInput, type Picture } from '../core/texpaint.ts';
 import { parseHex } from '../core/colour.ts';
 import { makeWatertight } from '../core/finish.ts';
-import { mapFinished } from '../core/finish-map.ts';
-import type { FinishOutput, Request } from './texture-jobs.ts';
+import { mapFinished, type FinishedModel } from '../core/finish-map.ts';
+import { Cutter } from '../core/cut.ts';
+import type { CutOutput, FinishOutput, Request } from './texture-jobs.ts';
 import { browserDecoder } from './decode.ts';
 
 setBrowserDecoder(browserDecoder);
 
 let input: PaintInput | null = null;
+let cutter: Cutter | null = null;
+let cutterKey = '';
+
+/** The buffers of a model, to hand to the page rather than copy. */
+function buffers(model: FinishedModel): ArrayBuffer[] {
+  const out: ArrayBufferLike[] = [model.mesh.positions.buffer, model.mesh.triangles.buffer, model.faceMaterial.buffer, model.faceGroup.buffer];
+  if (model.uvs) out.push(model.uvs.buffer);
+  if (model.vertexColours) out.push(model.vertexColours.buffer);
+  if (model.paint) out.push(model.paint.colour.buffer);
+  return [...new Set(out)] as ArrayBuffer[];
+}
 
 const post = (msg: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
@@ -60,11 +73,29 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           paint: r.paint, baseMaterial: r.baseMaterial,
         }, fin, (f) => progress(0.82 + f * 0.17, 'Carrying the paint and textures over'));
         const result: FinishOutput = { model, notes: fin.notes, volume: fin.volume, shells: fin.shells, hollows: fin.hollows, gapVolume: fin.gapVolume, looseRemoved: fin.looseRemoved };
-        const transfer: Transferable[] = [model.mesh.positions.buffer, model.mesh.triangles.buffer, model.faceMaterial.buffer, model.faceGroup.buffer];
-        if (model.uvs) transfer.push(model.uvs.buffer);
-        if (model.vertexColours) transfer.push(model.vertexColours.buffer);
-        if (model.paint) transfer.push(model.paint.colour.buffer);
-        post({ id: r.id, result }, transfer as ArrayBuffer[]);
+        post({ id: r.id, result }, buffers(model));
+        break;
+      }
+      case 'cut': {
+        if (!input) throw new Error('no model');
+        if (!cutter || cutterKey !== r.key) {
+          cutter?.dispose();
+          cutter = null;
+          progress(0.01, r.solid ? 'Reading the solid' : 'Making it solid to cut');
+          cutter = await Cutter.of(input.mesh, { solid: r.solid, groups: r.groups, sheet: r.sheet, progress: (f, m) => progress(f * 0.6, m) });
+          cutterKey = r.key;
+        }
+        const cut = cutter.cut(r.settings, (f, m) => progress(0.6 + f * 0.25, m));
+        const src = {
+          mesh: input.mesh, uvs: input.uvs, vertexColours: input.vertexColours ?? null, faceMaterial: input.faceMaterial, faceGroup: r.groups,
+          paint: r.paint, baseMaterial: r.baseMaterial,
+        };
+        const pieces = cut.pieces.map((p, i) => {
+          progress(0.85 + (0.15 * i) / cut.pieces.length, `Carrying the paint onto ${p.name.toLowerCase()}`);
+          return { name: p.name, kind: p.kind, faces: p.faces, axis: p.axis, volume: p.volume, model: mapFinished(src, p) };
+        });
+        const result: CutOutput = { pieces, notes: cut.notes, joints: cut.joints, volume: cutter.volume };
+        post({ id: r.id, result }, pieces.flatMap((p) => buffers(p.model)));
         break;
       }
     }

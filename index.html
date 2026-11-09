@@ -14,6 +14,7 @@
       <nav class="tabs segmented" aria-label="Mode">
         <button data-tab="model" class="active">Model</button>
         <button data-tab="finish" id="finish-tab-button">Finish</button>
+        <button data-tab="cut" id="cut-tab-button">Cut</button>
         <button data-tab="textures" id="textures-tab-button">Textures</button>
         <button data-tab="paint" id="paint-tab-button">Paint</button>
       </nav>
@@ -98,6 +99,91 @@
               <ul id="finish-stats" class="kv"></ul>
               <ul id="finish-notes" class="notes info"></ul>
               <p class="small muted">The watertight model is the one painted and saved while it is shown; the original keeps its own paint.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ Cut ============ -->
+        <section id="tab-cut" class="tab hidden">
+          <div class="step">
+            <h2><span class="n">1</span>Place the cuts</h2>
+            <p class="small muted">Split the model with planes so it prints in pieces that fit your printer, joined by pegs, dowels, magnets or a key. Drag a plane in the view to slide it, drag its round handle to tilt it, or pick a point on the model to put it there. Each piece comes out watertight, with its paint.</p>
+            <p id="cut-what" class="small muted">Open a model first.</p>
+            <span class="field-label">Add a cut</span>
+            <div class="row cut-add" id="cut-add">
+              <button type="button" data-axis="x" title="A plane across X, through the middle of the model" disabled>Across X</button>
+              <button type="button" data-axis="y" title="A plane across Y, through the middle of the model" disabled>Across Y</button>
+              <button type="button" data-axis="z" title="A plane across Z (level), through the middle of the model" disabled>Across Z</button>
+              <button type="button" data-axis="view" title="A plane facing you, as the view is turned now" disabled>Facing me</button>
+            </div>
+            <ul id="cut-list" class="cut-list" role="listbox" aria-label="Cuts"></ul>
+            <p id="cut-none" class="small muted">No cuts yet. Add one, then move it where the model should come apart.</p>
+          </div>
+          <div class="step hidden" id="cut-edit">
+            <h2 id="cut-edit-title">Cut 1</h2>
+            <div class="slider" title="Slide the plane along its direction (or drag it in the view)">
+              <div class="slider-head"><span>Position</span><span class="val"><input type="number" id="cut-position-num" step="0.5" /><span class="unit">mm</span></span></div>
+              <input type="range" id="cut-position" min="-50" max="50" step="0.5" value="0" />
+            </div>
+            <span class="field-label">Direction</span>
+            <div class="segmented" id="cut-dir" role="group" aria-label="Direction">
+              <button type="button" data-dir="x" title="Across X">X</button>
+              <button type="button" data-dir="y" title="Across Y">Y</button>
+              <button type="button" data-dir="z" title="Across Z (level)">Z</button>
+              <button type="button" data-dir="view" title="Face the plane towards you, as the view is turned now">Facing me</button>
+            </div>
+            <div class="row"><button type="button" id="cut-pick" title="Click a point on the model to move the plane through it">Pick a point</button></div>
+            <div class="slider" title="How far the plane leans from lying level (0°) to standing upright (90°); or drag its round handle in the view">
+              <div class="slider-head"><span>Tilt</span><span class="val"><input type="number" id="cut-tilt-num" min="0" max="180" step="1" /><span class="unit">°</span></span></div>
+              <input type="range" id="cut-tilt" min="0" max="180" step="1" value="0" />
+            </div>
+            <div class="slider" title="Which way the plane faces round the vertical">
+              <div class="slider-head"><span>Turn</span><span class="val"><input type="number" id="cut-turn-num" min="-180" max="180" step="1" /><span class="unit">°</span></span></div>
+              <input type="range" id="cut-turn" min="-180" max="180" step="1" value="0" />
+            </div>
+            <span class="field-label">Joint</span>
+            <div class="segmented" id="cut-joint" role="group" aria-label="Joint">
+              <button type="button" data-joint="flat" title="The cut faces as they are, to glue together">Flat</button>
+              <button type="button" data-joint="pegs" title="Round pegs on one side and holes on the other, wider by the clearance">Pegs</button>
+              <button type="button" data-joint="dowels" title="Holes on both sides and separate dowels (printed, or bought pins or filament)">Dowels</button>
+              <button type="button" data-joint="magnets" title="Round pockets on both sides for disc magnets">Magnets</button>
+              <button type="button" data-joint="key" title="A tongue in the shape of the cut face into a groove: the pieces only fit one way">Key</button>
+            </div>
+            <p id="cut-joint-about" class="small muted"></p>
+            <div class="field" id="cut-clearance-row" title="The gap left on each side between parts that fit together: 0.1 to 0.2 mm for a tight fit on a well-tuned printer, 0.3 mm or more for a loose fit or resin"><span>Clearance</span><span class="val"><input type="number" id="cut-clearance" min="0" max="2" step="0.05" /><span class="unit">mm</span></span></div>
+            <div class="field" id="cut-diameter-row"><span id="cut-diameter-label">Peg diameter</span><span class="val"><input type="number" id="cut-diameter" min="0.5" max="50" step="0.5" /><span class="unit">mm</span></span></div>
+            <div class="field" id="cut-magnet-d-row" title="The magnet's own size: the pocket is wider by the clearance"><span>Magnet diameter</span><span class="val"><input type="number" id="cut-magnet-d" min="0.5" max="50" step="0.5" /><span class="unit">mm</span></span></div>
+            <div class="field" id="cut-magnet-h-row" title="One magnet goes in each side"><span>Magnet thickness</span><span class="val"><input type="number" id="cut-magnet-h" min="0.2" max="50" step="0.5" /><span class="unit">mm</span></span></div>
+            <div class="field" id="cut-depth-row" title="Made shorter where a piece is too thin for it"><span id="cut-depth-label">Depth into each piece</span><span class="val"><input type="number" id="cut-depth" min="0.5" max="100" step="0.5" /><span class="unit">mm</span></span></div>
+            <div class="field" id="cut-count-row" title="How many on each separate area of the cut face. Automatic puts two where they fit (so the pieces can't turn), else one."><span>How many</span>
+              <select id="cut-count"><option value="0">Automatic</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
+            </div>
+            <label class="check" id="cut-flip-row"><input type="checkbox" id="cut-flip" /><span><span id="cut-flip-label">Pegs on the other side</span><small class="block muted">Normally on the side the round handle points to.</small></span></label>
+            <label class="check" id="cut-print-dowels-row"><input type="checkbox" id="cut-print-dowels" checked /><span>Make the dowels as pieces too<small class="block muted">Off: holes only, for bought pins or filament of that diameter.</small></span></label>
+            <div class="row hidden" id="cut-joint-all-row"><button type="button" id="cut-joint-all" title="Every cut gets this joint and its sizes">Use this joint for every cut</button></div>
+          </div>
+          <div class="step">
+            <h2><span class="n">2</span>Cut it</h2>
+            <details>
+              <summary>More settings</summary>
+              <div class="field" title="The least material kept between a peg, hole, pocket or key and the outside. Where there is no room for it, the cut is left flat there."><span>Wall around joints</span><span class="val"><input type="number" id="cut-wall" min="0.4" max="20" step="0.2" value="1.6" /><span class="unit">mm</span></span></div>
+            </details>
+            <div class="actions"><button id="cut-run" class="primary" disabled>Cut</button></div>
+            <div id="cut-result" class="hidden">
+              <p id="cut-stale" class="small warn hidden"></p>
+              <span class="field-label">Show</span>
+              <div class="segmented" id="cut-show" role="group" aria-label="Show">
+                <button type="button" data-show="model" title="The model whole, with the cut planes">Model</button>
+                <button type="button" data-show="pieces" class="active" title="Each piece in its own colour">Pieces</button>
+                <button type="button" data-show="painted" id="cut-show-painted" title="Each piece in the paint it took from the model">Paint</button>
+              </div>
+              <div class="slider" title="Shows the pieces apart in the view; it doesn't change them">
+                <div class="slider-head"><span>Spread apart</span></div>
+                <input type="range" id="cut-spread" min="0" max="1" step="0.01" value="0.25" />
+              </div>
+              <ul id="piece-list" class="piece-list"></ul>
+              <ul id="cut-notes" class="notes info"></ul>
+              <p class="small muted">To save the pieces, choose Each piece under Save: every piece goes in its own file, laid on a cut face to print.</p>
             </div>
           </div>
         </section>
@@ -259,6 +345,11 @@
         <div class="group-static">
           <h3 class="panel-title">Save</h3>
           <div class="field stack"><span>Name</span><input type="text" id="export-name" value="model" /></div>
+          <div class="segmented export-what" id="export-what" role="group" aria-label="What to save">
+            <button type="button" data-what="model" class="active" title="The model shown, in one file">Whole model</button>
+            <button type="button" data-what="pieces" id="export-what-pieces" disabled title="Cut it first (Cut tab)">Each piece</button>
+          </div>
+          <label class="check hidden" id="export-flat-row" title="Each piece turned so its biggest flat cut face (without pegs or a tongue on it) lies on the plate, centred; dowels stand on end"><input type="checkbox" id="export-flat" checked /><span>Lay the pieces flat to print<small class="block muted">Off: they keep their place in the model.</small></span></label>
           <div class="export">
             <button class="export-btn primary" id="export-3mf" disabled>Painted 3MF<small>One object with its paint: Bambu Studio, OrcaSlicer, PrusaSlicer</small></button>
             <button class="export-btn" id="export-split" disabled>3MF split by colour<small>A solid part per colour, for slicers without paint (needs a closed model)</small></button>

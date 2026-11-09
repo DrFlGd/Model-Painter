@@ -77,7 +77,7 @@ export const MAX_CELLS = 24_000_000;
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString('en')} ${n === 1 ? one : many}`;
 
 /** Where the result's triangles came from: each solid made from the model's triangles is known by its manifold ID. */
-class Origins {
+export class Origins {
   /** faceID → the model's triangle (−1 for one finishing made) */
   private ids: number[] = [];
   private mine = new Set<number>();
@@ -119,13 +119,13 @@ class Origins {
     return out;
   }
 
-  /** The mesh of a solid and, for each triangle, the model's triangle it lies on (or −1). */
-  read(s: Manifold): { mesh: IndexedMesh; source: Int32Array } {
+  /** The mesh of a solid and, for each triangle, the model's triangle it lies on (or −1); `other` for a triangle of no solid made here (a cut face, a peg). */
+  read(s: Manifold, other = -1): { mesh: IndexedMesh; source: Int32Array } {
     const g = s.getMesh();
     const nv = g.numVert, np = g.numProp, nt = g.triVerts.length / 3;
     const positions = new Float32Array(nv * 3);
     for (let v = 0; v < nv; v++) for (let d = 0; d < 3; d++) positions[v * 3 + d] = g.vertProperties[v * np + d];
-    const source = new Int32Array(nt).fill(-1);
+    const source = new Int32Array(nt).fill(other);
     const runs = g.runOriginalID?.length ?? 0;
     for (let r = 0; r < runs; r++) {
       if (!this.mine.has(g.runOriginalID[r])) continue;
@@ -136,7 +136,7 @@ class Origins {
 }
 
 /** A manifold mesh's positions alone, when it carries more numbers per vertex. */
-function positionsOf(g: { numVert: number; numProp: number; vertProperties: Float32Array }): Float32Array {
+export function positionsOf(g: { numVert: number; numProp: number; vertProperties: Float32Array }): Float32Array {
   const out = new Float32Array(g.numVert * 3);
   for (let v = 0; v < g.numVert; v++) for (let d = 0; d < 3; d++) out[v * 3 + d] = g.vertProperties[v * g.numProp + d];
   return out;

@@ -11,6 +11,8 @@ export class Stage {
   readonly camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100000);
   readonly controls: OrbitControls;
   readonly content = new THREE.Group();
+  /** helpers drawn in the view but not part of the model (the cut planes): left out of pictures and framing */
+  readonly extras = new THREE.Group();
   private plate = new THREE.Group();
   private wanted = false;
   private host: HTMLElement;
@@ -38,7 +40,7 @@ export class Stage {
     const fill = new THREE.DirectionalLight(0xffffff, 0.55);
     fill.position.set(1, 0.6, 0.4);
     this.camera.add(key, fill); // the light comes from the viewer, so every side shows its colours
-    this.scene.add(hemi, this.camera, this.plate, this.content);
+    this.scene.add(hemi, this.camera, this.plate, this.content, this.extras);
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
     this.setTheme(document.documentElement.dataset.theme === 'dark');
@@ -91,6 +93,13 @@ export class Stage {
     this.render();
   }
 
+  /** Shows or hides the build plate (pieces spread apart go below it). */
+  setPlateVisible(on: boolean): void {
+    if (this.plate.visible === on) return;
+    this.plate.visible = on;
+    this.render();
+  }
+
   /** Points the camera at a box from the front left, above, with all of it in view. */
   frame(box: THREE.Box3, keepDirection = false): void {
     if (box.isEmpty()) return;
@@ -108,9 +117,20 @@ export class Stage {
     this.render();
   }
 
-  /** A square picture of the content (the plate left out), as PNG bytes: the slicers show it in their file lists. */
-  async thumbnail(size = 512): Promise<Uint8Array> {
-    const box = new THREE.Box3().setFromObject(this.content);
+  /**
+   * A square picture of the content (the plate left out), as PNG bytes: the
+   * slicers show it in their file lists. `object`: that alone instead (one
+   * not in the view, such as a piece laid flat to print).
+   */
+  async thumbnail(size = 512, object?: THREE.Object3D): Promise<Uint8Array> {
+    let scene = this.scene;
+    if (object) {
+      scene = new THREE.Scene();
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.4);
+      hemi.position.set(0, 0, 1);
+      scene.add(hemi, object);
+    }
+    const box = new THREE.Box3().setFromObject(object ?? this.content);
     const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100000);
     cam.up.set(0, 0, 1);
     const centre = box.getCenter(new THREE.Vector3());
@@ -126,20 +146,26 @@ export class Stage {
     const target = new THREE.WebGLRenderTarget(size, size, { samples: 4, colorSpace: THREE.SRGBColorSpace });
     const background = this.scene.background;
     this.scene.background = null;
+    const plate = this.plate.visible, content = this.content.visible;
     this.plate.visible = false;
-    this.scene.add(cam);
+    this.extras.visible = false;
+    this.content.visible = true;
+    scene.add(cam);
     const clear = this.renderer.getClearAlpha();
     this.renderer.setClearAlpha(0);
     this.renderer.setRenderTarget(target);
     this.renderer.clear();
-    this.renderer.render(this.scene, cam);
+    this.renderer.render(scene, cam);
     const px = new Uint8Array(size * size * 4);
     this.renderer.readRenderTargetPixels(target, 0, 0, size, size, px);
     this.renderer.setRenderTarget(null);
     this.renderer.setClearAlpha(clear);
-    this.scene.remove(cam);
+    scene.remove(cam);
+    if (object) scene.remove(object);
     this.scene.background = background;
-    this.plate.visible = true;
+    this.plate.visible = plate;
+    this.extras.visible = true;
+    this.content.visible = content;
     target.dispose();
     this.render();
     const canvas = document.createElement('canvas');

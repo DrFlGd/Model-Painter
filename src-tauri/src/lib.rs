@@ -2,15 +2,22 @@
 // the web version; the desktop adds what a browser cannot do: open a model
 // where it is on disk, so the textures beside it (in its folder, or a
 // sibling folder such as "../textures") are found without choosing them;
-// save exports through the system's save dialog; and open the model the app
-// was started with (dropped on its icon, or "Open with").
+// save exports through the system's save dialog, and a cut model's pieces
+// into a new folder; and open the model the app was started with (dropped on
+// its icon, or "Open with").
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+
+/// The folders `make_folder` made: `write_file` writes only into these.
+#[derive(Default)]
+struct Made(Mutex<HashSet<PathBuf>>);
 
 /// Files listed at most, so a game's whole extracted folder does not stall the app.
 const MAX_FILES: usize = 60_000;
@@ -125,6 +132,62 @@ async fn export_file(app: AppHandle, request: Request<'_>) -> Result<Option<Stri
     Ok(Some(path.display().to_string()))
 }
 
+/// The system's folder dialog: the folder picked, or None when cancelled.
+#[tauri::command]
+async fn pick_folder(app: AppHandle, title: String) -> Result<Option<String>, String> {
+    match app.dialog().file().set_title(&title).blocking_pick_folder() {
+        None => Ok(None),
+        Some(p) => Ok(Some(p.into_path().map_err(|e| e.to_string())?.display().to_string())),
+    }
+}
+
+/// A name with no path in it, for a file or folder.
+fn plain_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if "\\/:*?\"<>|".contains(c) || c.is_control() { '_' } else { c }).collect();
+    let s = s.trim().trim_matches('.').to_string();
+    if s.is_empty() { "pieces".into() } else { s }
+}
+
+/// Makes a new folder `name` in `parent` ("name 2", "name 3"... when it is
+/// taken, so saving again never mixes two sets of pieces): its path.
+#[tauri::command]
+fn make_folder(made: State<'_, Made>, parent: String, name: String) -> Result<String, String> {
+    let base = Path::new(&parent);
+    let name = plain_name(&name);
+    for n in 1..1000 {
+        let p = if n == 1 { base.join(&name) } else { base.join(format!("{name} {n}")) };
+        if p.exists() {
+            continue;
+        }
+        fs::create_dir_all(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        made.0.lock().map_err(|e| e.to_string())?.insert(p.clone());
+        return Ok(p.display().to_string());
+    }
+    Err(format!("{}: there are too many folders named {name}", base.display()))
+}
+
+/// Writes the body as the file named in the `x-name` header into the folder in
+/// `x-folder`, which `make_folder` made.
+#[tauri::command]
+async fn write_file(made: State<'_, Made>, request: Request<'_>) -> Result<(), String> {
+    let header = |k: &str| request.headers().get(k).and_then(|v| v.to_str().ok()).map(decode_name);
+    let (Some(folder), Some(name)) = (header("x-folder"), header("x-name")) else {
+        return Err("expected a folder and a name".into());
+    };
+    let folder = PathBuf::from(folder);
+    if !made.0.lock().map_err(|e| e.to_string())?.contains(&folder) {
+        return Err(format!("{}: not a folder made for saving", folder.display()));
+    }
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the file's bytes".into());
+    };
+    let path = folder.join(plain_name(&name));
+    let tmp = path.with_extension("partial");
+    fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(())
+}
+
 /// The header carries the name percent-encoded (headers are ASCII).
 fn decode_name(s: &str) -> String {
     let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
@@ -155,14 +218,23 @@ fn startup_file() -> Option<String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_file, path_kind, list_files, pick_file, export_file, startup_file])
+        .manage(Made::default())
+        .invoke_handler(tauri::generate_handler![read_file, path_kind, list_files, pick_file, export_file, pick_folder, make_folder, write_file, startup_file])
         .run(tauri::generate_context!())
         .expect("error while running Model Painter");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::decode_name;
+    use super::{decode_name, plain_name};
+
+    #[test]
+    fn names_have_no_path_in_them() {
+        assert_eq!(plain_name("knight_pieces"), "knight_pieces");
+        assert_eq!(plain_name("a/b\\c:d"), "a_b_c_d");
+        assert_eq!(plain_name(".."), "pieces");
+        assert_eq!(plain_name("  "), "pieces");
+    }
 
     #[test]
     fn names_come_back_from_the_header() {
